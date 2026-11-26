@@ -25,7 +25,7 @@ jobs:
     env:
       LIVE_BUILD_CONFIGURED: ${{ secrets.VITE_SUPABASE_URL != '' && secrets.VITE_SUPABASE_ANON_KEY != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
       - run: npm ci
@@ -105,7 +105,7 @@ jobs:
       AUREX_LIVE_EMAIL: ${{ secrets.AUREX_E2E_LIVE_EMAIL }}
       AUREX_LIVE_PASSWORD: ${{ secrets.AUREX_E2E_LIVE_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
       - run: npm ci

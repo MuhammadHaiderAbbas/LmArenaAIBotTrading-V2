@@ -16,7 +16,7 @@ jobs:
     name: Go-live evidence gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: { python-version: "3.13" }
       - name: Verify evidence, off-site automation and alerts
@@ -29,7 +29,7 @@ jobs:
       REGISTRY: ghcr.io/${{ github.repository_owner }}
       VERSION: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build
         run: |
           owner="$(echo "$REGISTRY" | tr '[:upper:]' '[:lower:]')"
