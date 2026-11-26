@@ -24,7 +24,7 @@ jobs:
     name: Go-live evidence gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: { python-version: "3.13" }
       - run: python scripts/check_compliance_evidence.py
@@ -39,7 +39,7 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       AUREX_EXPECTED_VERSION: ${{ vars.AUREX_EXPECTED_VERSION || 'phase-2.0' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Wake Supabase if paused
         run: bash scripts/wake-supabase.sh
       - name: Deploy six Edge Functions
@@ -59,7 +59,7 @@ jobs:
       AUREX_DEPLOY_DIR: ${{ secrets.AUREX_DEPLOY_DIR }}
       AUREX_PUBLIC_DOMAIN: ${{ secrets.AUREX_PUBLIC_DOMAIN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Roll containers over SSH
         run: |
           if [[ -z "${AUREX_SSH_HOST:-}" || -z "${AUREX_SSH_KEY:-}" || -z "${AUREX_DEPLOY_DIR:-}" ]]; then
