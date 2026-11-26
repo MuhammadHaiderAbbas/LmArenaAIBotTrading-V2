@@ -41,10 +41,10 @@ jobs:
           docker build "${labels[@]}" --target ops -t "$owner/aurex-ops:$VERSION" ./backend
           docker build "${labels[@]}" -t "$owner/aurex-web:$VERSION" ./frontend
       - name: Scan backend (block on fixable critical)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0, pinned by commit
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.35.0, pinned by commit
         with: { image-ref: "${{ env.OWNER }}/aurex-backend:${{ env.VERSION }}", severity: CRITICAL, ignore-unfixed: true, exit-code: "1" }
       - name: Scan web (block on fixable critical)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0, pinned by commit
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.35.0, pinned by commit
         with: { image-ref: "${{ env.OWNER }}/aurex-web:${{ env.VERSION }}", severity: CRITICAL, ignore-unfixed: true, exit-code: "1" }
       - name: Push
         run: |

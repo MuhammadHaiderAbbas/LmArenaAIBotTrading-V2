@@ -60,14 +60,14 @@ jobs:
           docker build --target ops -t aurex-ops:scan ./backend
           docker build -t aurex-web:scan ./frontend
       - name: Scan backend image (fail on fixable critical)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0, pinned by commit
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.35.0, pinned by commit
         with: { image-ref: "aurex-backend:scan", severity: CRITICAL, ignore-unfixed: true, exit-code: "1", format: table }
       - name: Scan web image (fail on fixable critical)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0, pinned by commit
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.35.0, pinned by commit
         with: { image-ref: "aurex-web:scan", severity: CRITICAL, ignore-unfixed: true, exit-code: "1", format: table }
       - name: Scan ops image (fail on fixable critical)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0, pinned by commit
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.35.0, pinned by commit
         with: { image-ref: "aurex-ops:scan", severity: CRITICAL, ignore-unfixed: true, exit-code: "1", format: table }
       - name: Report high-severity findings (informational)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0, pinned by commit
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.35.0, pinned by commit
         with: { image-ref: "aurex-backend:scan", severity: HIGH, ignore-unfixed: true, exit-code: "0", format: table }
