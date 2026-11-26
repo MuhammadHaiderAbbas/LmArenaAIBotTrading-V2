@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.13" }
       - name: Marketing / data change requires fresh legal sign-off
         run: |
@@ -38,7 +38,7 @@ jobs:
       AUREX_REDIS_URL: redis://localhost:6379/15   # exercise the shared limiter in the full suite
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.13", cache: pip, cache-dependency-path: backend/requirements*.txt }
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
@@ -89,7 +89,7 @@ jobs:
       AUREX_E2E_ADMIN_PASSWORD: Ci-Operator-Key-42!
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.13", cache: pip, cache-dependency-path: backend/requirements*.txt }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
@@ -131,7 +131,7 @@ jobs:
       BACKUP_DIR: /tmp/backups
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.13", cache: pip, cache-dependency-path: backend/requirements*.txt }
       - run: pip install -r requirements.txt
       - name: Postgres client matches the server major version (16), from the PGDG repository
