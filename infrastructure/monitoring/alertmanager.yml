@@ -1,0 +1,37 @@
+# Alertmanager routing for AUREX pages and tickets.
+# Replace __WEBHOOK_URL__ with the PagerDuty/Opsgenie/on-call webhook before starting
+# Alertmanager. The deployment's AUREX_ALERTMANAGER_WEBHOOK_URL must point at the
+# Alertmanager API (http://alertmanager:9093/api/v2/alerts when using the compose service)
+# or at the same webhook if you run Alertmanager externally.
+route:
+  receiver: aurex-ticket
+  group_by: [alertname, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: aurex-page
+      matchers: [severity="page"]
+      repeat_interval: 30m
+    - receiver: aurex-info
+      matchers: [severity="info"]
+      repeat_interval: 12h
+
+receivers:
+  - name: aurex-page
+    webhook_configs:
+      - url: __WEBHOOK_URL__
+        send_resolved: true
+  - name: aurex-ticket
+    webhook_configs:
+      - url: __WEBHOOK_URL__
+        send_resolved: true
+  - name: aurex-info
+    webhook_configs:
+      - url: __WEBHOOK_URL__
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers: [severity="page"]
+    target_matchers: [severity="ticket"]
+    equal: [alertname]

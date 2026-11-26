@@ -2,6 +2,7 @@ import { ShieldCheck } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { Logo } from "@/components/layout/AppShell";
+import { PaperTradingBanner } from "@/components/layout/PaperTradingBanner";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner, Spinner } from "@/components/ui/feedback";
 import { Field, Input } from "@/components/ui/form";
@@ -10,7 +11,9 @@ import { api, ApiError, isDemo, type TradingAccount } from "@/services/api";
 
 function AuthLayout({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
   return (
-    <div className="grid min-h-full lg:grid-cols-[1fr_520px]">
+    <div className="flex min-h-full flex-col">
+      <PaperTradingBanner />
+      <div className="grid flex-1 lg:grid-cols-[1fr_520px]">
       <section className="relative hidden overflow-hidden border-r border-border bg-surface lg:flex lg:flex-col lg:justify-between lg:p-12">
         <div className="pointer-events-none absolute inset-0 opacity-[0.07]"
           style={{ backgroundImage: "linear-gradient(var(--color-fg) 1px, transparent 1px), linear-gradient(90deg, var(--color-fg) 1px, transparent 1px)", backgroundSize: "48px 48px" }} />
@@ -36,13 +39,15 @@ function AuthLayout({ title, subtitle, children }: { title: string; subtitle: st
           <p className="mt-1 text-sm text-muted">{subtitle}</p>
           {isDemo && (
             <div className="mt-5 rounded-md border border-info/40 bg-info/10 px-3 py-2.5 text-xs leading-relaxed text-info">
-              <strong>Public demo.</strong> This build runs entirely in your browser: accounts, balances and prices
-              are simulated and stored only on this device. The production system runs the FastAPI backend.
+              <strong>Public demo.</strong> SIMULATED DATA: accounts, balances and prices are generated in this
+              browser and stored only on this device. No real market data or money is used. The
+              <a className="underline" href={`${import.meta.env.BASE_URL}live/`}> live API build</a> connects to Supabase.
             </div>
           )}
           <div className="mt-6">{children}</div>
         </div>
       </section>
+      </div>
     </div>
   );
 }

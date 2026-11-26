@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user, get_audit_context, require_admin
-from app.core.errors import NotFound, RateLimited
+from app.core.errors import BusinessRuleViolation, NotFound, RateLimited
 from app.core.rate_limit import SlidingWindowLimiter
 from app.database.session import get_db
 from app.ml.models import ALGORITHMS
@@ -90,7 +90,15 @@ async def promote(version_id: uuid.UUID, admin: User = Depends(require_admin),
                   ctx: AuditContext = Depends(get_audit_context), db: AsyncSession = Depends(get_db)):
     svc = MLService(db)
     v = await svc.get(version_id)
-    previous = await svc.promote(admin, v)
+    try:
+        previous = await svc.promote(admin, v)
+    except BusinessRuleViolation as e:
+        # Failed promotion attempts are audited too: an operator must not be able to
+        # silently probe or override the gates without a record.
+        await AuditService(db).record(ctx, "ml.promote", resource_type="model_version", resource_id=v.id,
+                                      outcome="failure", details={"version": v.version, "reasons": e.details})
+        await db.commit()
+        raise
     await AuditService(db).record(ctx, "ml.promote", resource_type="model_version", resource_id=v.id,
                                   details={"symbol": v.symbol, "version": v.version,
                                            "retired": str(previous.id) if previous else None})

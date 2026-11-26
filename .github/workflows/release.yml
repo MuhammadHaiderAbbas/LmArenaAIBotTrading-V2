@@ -12,7 +12,18 @@ permissions:
   packages: write
 
 jobs:
+  compliance:
+    name: Go-live evidence gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - name: Verify evidence, off-site automation and alerts
+        run: python scripts/check_compliance_evidence.py
+
   images:
+    needs: compliance
     runs-on: ubuntu-latest
     env:
       REGISTRY: ghcr.io/${{ github.repository_owner }}
@@ -41,3 +52,10 @@ jobs:
           for img in aurex-backend aurex-ops aurex-web; do
             docker push "$OWNER/$img:$VERSION"
           done
+
+  deploy:
+    needs: images
+    uses: ./.github/workflows/deploy.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit

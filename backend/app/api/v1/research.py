@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from datetime import UTC, datetime
@@ -11,12 +12,14 @@ from app.core.config import get_settings
 from app.core.errors import BusinessRuleViolation, NotFound, RateLimited
 from app.core.rate_limit import SlidingWindowLimiter
 from app.database.session import get_db
+from app.market.service import MarketService, ProviderUnavailable
 from app.models import ResearchDocument, ResearchReport, User
 from app.research import extract as ex
 from app.research import fetch as rf
 from app.research.classify import DOC_TYPES
 from app.research.embeddings import get_embedder
-from app.research.llm import claude_draft
+from app.research.fundamentals import FundamentalService
+from app.research.llm import claude_draft, credential_status
 from app.research.reports import build_report, extractive_draft
 from app.research.service import ResearchService
 from app.research.text import normalise
@@ -28,6 +31,7 @@ from app.schemas.research import (
     DocumentDetail,
     DocumentRead,
     FetchRequest,
+    FundamentalAnalysisRead,
     IngestResult,
     ReportRead,
     ReportSummary,
@@ -41,12 +45,28 @@ ask_limiter = SlidingWindowLimiter("research_ask")
 DOC_RESOURCE = "research_document"
 
 
+@router.get("/fundamentals", response_model=FundamentalAnalysisRead)
+async def fundamentals(symbol: str = Query(..., max_length=32),
+                       _: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
+    """Ratios/valuation with explicit provenance; never silently mixes vendor and parsed figures."""
+    market = MarketService(db)
+    inst = await market.get(symbol)
+    try:
+        last = float((await market.quote(inst)).last)
+    except ProviderUnavailable:
+        last = None
+    analysis = await FundamentalService().analyse(inst, last, db)
+    return FundamentalAnalysisRead.model_validate(analysis.as_dict())
+
+
 @router.get("/status", response_model=ResearchStatus)
 async def research_status(_: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
     s = get_settings()
     stats = await ResearchService(db).stats()
+    creds = credential_status()
     return ResearchStatus(
         engine=s.research_engine, model=s.llm_model if s.research_engine == "claude" else None,
+        llm_key_configured=creds["configured"], llm_key_source=creds["source"],
         embedding_model=get_embedder().name, url_ingestion_enabled=bool(s.research_allowed_hosts),
         **stats)
 
@@ -100,7 +120,8 @@ async def add_document(data: DocumentCreate, admin: User = Depends(require_admin
         extracted = ex.Extracted(data.title, [ex.Section(normalise(data.text or ""))], "text/plain")
     doc = await ResearchService(db).ingest(
         extracted, source_name=data.source_name, source_url=data.source_url,
-        published_at=data.published_at, doc_type=data.doc_type, created_by=admin.id)
+        published_at=data.published_at, doc_type=data.doc_type, created_by=admin.id,
+        ocr_pages=extracted.ocr_pages)
     return await _finish(db, ctx, [doc], "manual")
 
 
@@ -116,14 +137,14 @@ async def upload_document(
     ctype = ex.sniff(file.content_type, file.filename, data)
     if ctype == "application/rss+xml":
         raise BusinessRuleViolation("Upload feeds via /research/documents/fetch")
-    extracted = ex.extract(data, ctype, title or (file.filename or "upload"))
+    extracted = await asyncio.to_thread(ex.extract, data, ctype, title or (file.filename or "upload"))
     if title:
         extracted.title = title
     if published_at and published_at.tzinfo is None:
         published_at = published_at.replace(tzinfo=UTC)
     doc = await ResearchService(db).ingest(
         extracted, source_name=source_name, source_url=None, published_at=published_at,
-        doc_type=doc_type, created_by=admin.id)
+        doc_type=doc_type, created_by=admin.id, ocr_pages=extracted.ocr_pages)
     return await _finish(db, ctx, [doc], f"upload:{ctype}")
 
 
@@ -147,10 +168,11 @@ async def fetch_document(data: FetchRequest, admin: User = Depends(require_admin
             except BusinessRuleViolation:
                 continue  # e.g. an item with too little text
     else:
-        extracted = ex.extract(raw, ctype, data.url)
+        extracted = await asyncio.to_thread(ex.extract, raw, ctype, data.url)
         results.append(await svc.ingest(
-            extracted, source_name=data.source_name or host, source_url=data.url,
-            published_at=None, doc_type=None, created_by=admin.id))
+        extracted, source_name=data.source_name or host, source_url=data.url,
+        published_at=None, doc_type=None, created_by=admin.id,
+        ocr_pages=extracted.ocr_pages))
     return await _finish(db, ctx, results, "fetch")
 
 

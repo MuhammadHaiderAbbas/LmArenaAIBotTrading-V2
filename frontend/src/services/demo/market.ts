@@ -19,6 +19,11 @@ const EQUITY: Record<string, { tz: string; open: [number, number]; close: [numbe
   US_EQUITY: { tz: "America/New_York", open: [9, 30], close: [16, 0], holidays: NYSE },
   UK_EQUITY: { tz: "Europe/London", open: [8, 0], close: [16, 30], holidays: LSE },
 };
+// Local-time close overrides, mirroring backend/app/market/calendar.py::EARLY_CLOSES.
+const EARLY_CLOSES: Record<string, Record<string, [number, number]>> = {
+  US_EQUITY: { "2026-11-27": [13, 0], "2026-12-24": [13, 0], "2027-11-26": [13, 0] },
+  UK_EQUITY: { "2026-12-24": [12, 30], "2026-12-31": [12, 30], "2027-12-24": [12, 30], "2027-12-31": [12, 30] },
+};
 const DAY = 86_400_000;
 
 const fmtCache = new Map<string, Intl.DateTimeFormat>();
@@ -71,10 +76,19 @@ export function sessions(market: MarketKey, start: number, end: number): Session
       const wd = new Date(d).getUTCDay();
       if (wd === 0 || wd === 6 || cfg.holidays.has(iso(d))) continue;
       const [y, m, dd] = ymd(d);
-      raw.push([zoned(y, m, dd, cfg.open[0], cfg.open[1], cfg.tz), zoned(y, m, dd, cfg.close[0], cfg.close[1], cfg.tz)]);
+      const early = EARLY_CLOSES[market]?.[iso(d)] ?? cfg.close;
+      raw.push([zoned(y, m, dd, cfg.open[0], cfg.open[1], cfg.tz), zoned(y, m, dd, early[0], early[1], cfg.tz)]);
     }
   }
   return raw.filter(([s, e]) => e > start && s < end).map(([s, e]) => [Math.max(s, start), Math.min(e, end)]);
+}
+
+/** DAY-order expiry: the end of the current (or next) session; UTC midnight for 24/7 crypto. */
+export function dayExpiry(market: MarketKey, at: number): number {
+  const tomorrow = (() => { const d = new Date(at); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1); })();
+  if (market === "CRYPTO_24_7") return tomorrow;
+  const up = sessions(market, at, at + 10 * DAY);
+  return up.length ? up[0]![1] : tomorrow;
 }
 
 export const isOpen = (market: MarketKey, at: number) => sessions(market, at, at + 1000).length > 0;
@@ -186,7 +200,7 @@ export function quote(i: DemoInstrument, nowMs = Date.now()) {
     symbol: i.symbol, last: last.toFixed(d), bid: (last * (1 - half)).toFixed(d), ask: (last * (1 + half)).toFixed(d),
     prev_close: prev.toFixed(d), change: change.toFixed(d), change_pct: ((change / prev) * 100).toFixed(2),
     as_of: new Date(asOf).toISOString(), source: "synthetic", market_open: open, stale: false,
-    tradable: open, age_seconds: Math.max(0, Math.floor((nowMs - asOf) / 1000)),
+    tradable: open, age_seconds: Math.max(0, Math.floor((nowMs - asOf) / 1000)), pricing: "simulated",
   };
 }
 

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "note": "Go-live evidence. An item passes only when signed_off is true, sha256 matches the file on disk, and reviewed_at is within max_age_days. Never mark an external review complete without the signed report.",
+  "evidence": [
+    {
+      "id": "pentest",
+      "label": "External penetration test with all high/critical findings resolved",
+      "path": "docs/compliance/penetration-test-report.md",
+      "sha256": null,
+      "signed_off": false,
+      "reviewer": null,
+      "reviewed_at": null,
+      "max_age_days": 365
+    },
+    {
+      "id": "solicitor",
+      "label": "UK solicitor opinion on the regulatory perimeter and promotions",
+      "path": "docs/compliance/uk-solicitor-opinion.md",
+      "sha256": null,
+      "signed_off": false,
+      "reviewer": null,
+      "reviewed_at": null,
+      "max_age_days": 365
+    },
+    {
+      "id": "dpia",
+      "label": "Approved UK GDPR DPIA",
+      "path": "docs/compliance/dpia.md",
+      "sha256": "c4918e4835cfb1c2698b7a02aa4678b0e249c35802dca08cde987c02322c1f1d",
+      "signed_off": false,
+      "reviewer": null,
+      "reviewed_at": null,
+      "max_age_days": 365
+    },
+    {
+      "id": "privacy_policy",
+      "label": "Approved and published privacy policy",
+      "path": "docs/compliance/privacy-policy.md",
+      "sha256": "f5cecdfce9d77838cf8b7ab521911b68e806ae0cdb06cee7bbc3364ea255ccc3",
+      "signed_off": false,
+      "reviewer": null,
+      "reviewed_at": null,
+      "max_age_days": 365
+    },
+    {
+      "id": "legal_soft_launch",
+      "label": "Legal re-review for marketing, data and public-copy changes",
+      "path": "docs/compliance/legal-review.md",
+      "sha256": null,
+      "signed_off": false,
+      "reviewer": null,
+      "reviewed_at": null,
+      "max_age_days": 90
+    }
+  ]
+}

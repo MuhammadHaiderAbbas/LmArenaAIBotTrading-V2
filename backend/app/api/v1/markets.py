@@ -13,9 +13,11 @@ from app.core.errors import BusinessRuleViolation, Conflict, NotFound
 from app.core.security import decode_access_token
 from app.database.session import SessionLocal, get_db
 from app.market import indicators as ind
-from app.market.service import MarketService, Quote, market_statuses
+from app.market.positioning import PositioningService
+from app.market.service import MarketService, ProviderUnavailable, Quote, market_statuses
 from app.market.types import TIMEFRAMES, AssetClass
 from app.models import Instrument, User, UserSession, Watchlist, WatchlistItem
+from app.realtime.bus import get_bus
 from app.schemas.market import (
     BackfillRequest,
     CandleRead,
@@ -24,6 +26,8 @@ from app.schemas.market import (
     InstrumentWithQuote,
     MarketOverview,
     MarketStatus,
+    PositioningRead,
+    PositioningResponse,
     QuoteRead,
     WatchlistAdd,
     WatchlistRead,
@@ -79,6 +83,19 @@ async def instrument(symbol: str, _: User = Depends(current_user),
 async def quote(symbol: str, _: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
     svc = MarketService(db)
     return await svc.quote(await svc.get(symbol))
+
+
+@router.get("/instruments/{symbol}/positioning", response_model=PositioningResponse)
+async def positioning(symbol: str, _: User = Depends(current_user),
+                      db: AsyncSession = Depends(get_db)):
+    """Venue funding/open interest for crypto perps; explicitly unavailable otherwise."""
+    inst = await MarketService(db).get(symbol)
+    snap = await PositioningService().snapshot(inst.symbol)
+    if snap is None:
+        return PositioningResponse(available=False, reason="positioning feed unavailable")
+    data = snap.as_dict()
+    data["as_of"] = datetime.fromtimestamp(snap.as_of, UTC)
+    return PositioningResponse(available=True, data=PositioningRead.model_validate(data))
 
 
 @router.get("/instruments/{symbol}/candles", response_model=CandlesResponse)
@@ -212,6 +229,11 @@ async def stream(ws: WebSocket):
       client → {"type": "subscribe", "symbols": ["BTC-USD", ...]}  (replaces the set)
       server → {"type": "ready"} | {"type": "quotes", "data": [...]} | {"type": "error", ...}
     Tokens are sent in-band rather than in the URL so they never reach access logs.
+
+    Quotes are fetched once per symbol per poll (a short Redis lease elects the
+    fetching replica when fan-out is enabled) and published to the shared event
+    bus. Every replica's clients receive the same snapshot; no client can see a
+    symbol it has not subscribed to.
     """
     s = get_settings()
     await ws.accept()
@@ -227,43 +249,70 @@ async def stream(ws: WebSocket):
     await ws.send_json({"type": "ready", "interval_seconds": s.stream_interval_seconds})
 
     symbols: list[str] = []
-    queue: asyncio.Queue[dict] = asyncio.Queue()
+    allowed: set[str] = set()          # canonical symbols this client subscribed to
+    commands: asyncio.Queue[dict] = asyncio.Queue()
+    bus = get_bus()
+    owner = f"quote-{uuid.uuid4().hex}"
+    lease_ttl = max(1.0, s.stream_interval_seconds * 3)
 
     async def reader():
         while True:
-            await queue.put(await ws.receive_json())
+            await commands.put(await ws.receive_json())
+
+    async def fetch_and_publish() -> None:
+        async with SessionLocal() as db:
+            svc = MarketService(db)
+            for raw in symbols:
+                try:
+                    inst = await svc.get(raw)
+                except NotFound:
+                    continue
+                allowed.add(inst.symbol)
+                if not await bus.acquire_lease(f"aurex:lease:quote:{inst.symbol}", lease_ttl, owner):
+                    continue                    # another replica owns this symbol this tick
+                try:
+                    q = await svc.quote(inst)
+                except ProviderUnavailable:
+                    continue                    # outage: publish nothing, never a fake price
+                await bus.publish(f"quote:{inst.symbol}",
+                                  QuoteRead.model_validate(q).model_dump(mode="json"))
+
+    async def flush() -> None:
+        batch: list[dict] = []
+        while True:
+            try:
+                event = sub.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            payload = event["data"]
+            if payload.get("symbol") in allowed:
+                # Keep every snapshot: a newer local poll must not replace a
+                # cross-node event that arrived in the same batch.
+                batch.append(payload)
+        if batch:
+            await ws.send_json({
+                "type": "quotes", "sent_at": datetime.now(UTC).isoformat(), "data": batch,
+            })
 
     reader_task = asyncio.create_task(reader())
     try:
-        while True:
-            try:
-                msg = await asyncio.wait_for(queue.get(), timeout=s.stream_interval_seconds)
-                if msg.get("type") == "subscribe":
-                    req = [str(x) for x in msg.get("symbols", [])][: s.max_stream_symbols]
-                    symbols = req  # fall through: push immediately
+        async with bus.subscribe("quote:*") as sub:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(commands.get(), timeout=s.stream_interval_seconds)
+                except TimeoutError:
+                    pass
                 else:
-                    await ws.send_json({"type": "error", "message": "unknown message type"})
-                    continue
-            except TimeoutError:
-                pass
-            if reader_task.done():
-                break
-            if not symbols:
-                continue
-            async with SessionLocal() as db:
-                svc = MarketService(db)
-                insts = []
-                for sym in symbols:
-                    try:
-                        insts.append(await svc.get(sym))
-                    except NotFound:
-                        continue
-                quotes = await svc.quotes(insts)
-            await ws.send_json({
-                "type": "quotes", "sent_at": datetime.now(UTC).isoformat(),
-                "data": [QuoteRead.model_validate(q).model_dump(mode="json")
-                         for q in quotes.values() if q],
-            })
+                    if msg.get("type") == "subscribe":
+                        symbols = [str(x) for x in msg.get("symbols", [])][: s.max_stream_symbols]
+                        allowed.clear()            # stale canonical symbols cannot leak
+                        await flush()
+                    else:
+                        await ws.send_json({"type": "error", "message": "unknown message type"})
+                if reader_task.done():
+                    break
+                await fetch_and_publish()
+                await flush()
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:

@@ -23,3 +23,13 @@ Stage 1 is a **private research and paper-trading system**. The codebase enforce
 - Financial-promotion rules for marketing (including cryptoasset promotions).
 - Current status and timelines of the UK cryptoasset regime — verify directly with the FCA.
 - Data protection (UK GDPR) — DPIA before onboarding external users.
+
+During the soft launch, every surface carries a persistent paper-only banner, the public
+`/status` page reports safe readiness, and `/feedback` accepts rate-limited reports. Marketing
+copy, market-data and privacy-disclosure changes require a fresh legal re-review
+(`scripts/check_legal_gate.py`); an earlier review does not carry forward.
+
+Before any go-live decision, `python -m app.cli go-live-check` must exit 0 and
+`python scripts/check_compliance_evidence.py` must pass. Both fail while the penetration
+test, solicitor opinion, DPIA or privacy policy is unsigned or its evidence hash differs
+from the approved document. See ADR 048 and `docs/compliance/` for the templates/brieves.

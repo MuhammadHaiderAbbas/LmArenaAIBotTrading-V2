@@ -1,6 +1,8 @@
-name: Deploy demo to GitHub Pages
+name: Deploy demo and live build to GitHub Pages
 
-# Publishes the static demo build (in-browser simulated backend, synthetic market data).
+# Publishes two clearly separate surfaces from one artifact:
+#   /<repo>/            static demo, simulated in-browser data
+#   /<repo>/live/       live build pointing at the real Supabase Edge API
 # Requires: Settings → Pages → Build and deployment → Source = "GitHub Actions".
 on:
   push:
@@ -20,29 +22,92 @@ jobs:
   build:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }
-    env:
-      VITE_BASE: /${{ github.event.repository.name }}/
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
       - run: npm ci
       - run: npx tsc -b
-      - run: npm run build:demo
-      - name: Smoke-test the built site
+      - name: Demo/backend rule parity
+        run: npm run check:parity
+
+      - name: Build static demo (simulated data)
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+          VITE_DEMO_MODE: "true"
+        run: npm run build:demo
+
+      - name: Smoke-test the static demo
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
         run: |
           npx playwright install --with-deps chromium
           node scripts/pages-preview.cjs dist "$VITE_BASE" 4173 &
           AUREX_E2E_DEMO=1 AUREX_WEB_URL="http://localhost:4173$VITE_BASE" npx playwright test e2e/demo.spec.ts --trace off
+
+      - name: Build live API build
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/live/
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: npm run build:live:pages
+
+      - name: Verify live build configuration (values not printed)
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+        run: |
+          node -e '
+          const fs = require("fs"), path = require("path");
+          const html = fs.readFileSync("dist/live/index.html", "utf8");
+          if (!html.includes("Content-Security-Policy")) throw new Error("live CSP meta missing");
+          const dir = "dist/live/assets";
+          const js = fs.readdirSync(dir).filter(f => f.endsWith(".js"))
+            .map(f => fs.readFileSync(path.join(dir, f), "utf8")).join("\n");
+          if (!process.env.VITE_SUPABASE_URL || !js.includes(process.env.VITE_SUPABASE_URL))
+            throw new Error("live build does not contain the configured API URL");
+          console.log("live build has CSP and points at the configured API");
+          '
+
       - uses: actions/upload-pages-artifact@v3
         with: { path: frontend/dist }
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  e2e-deployed:
+    name: E2E against the published builds
+    needs: deploy
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    env:
+      AUREX_WEB_URL: ${{ needs.deploy.outputs.page_url }}
+      AUREX_E2E_DEPLOYED: "1"
+      AUREX_E2E_DEMO: "1"
+      AUREX_LIVE_URL: live/
+      AUREX_LIVE_EMAIL: ${{ secrets.AUREX_E2E_LIVE_EMAIL }}
+      AUREX_LIVE_PASSWORD: ${{ secrets.AUREX_E2E_LIVE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - name: Playwright against the published demo and live shells
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test e2e/deployed.spec.ts e2e/demo.spec.ts --trace off
+      - name: Authenticated live API check (only with a dedicated CI user)
+        run: |
+          if [[ -z "${AUREX_LIVE_EMAIL:-}" || -z "${AUREX_LIVE_PASSWORD:-}" ]]; then
+            echo "::notice::AUREX_E2E_LIVE_EMAIL/PASSWORD not set; skipping authenticated live E2E"
+            exit 0
+          fi
+          npx playwright test e2e/live-phase0.spec.ts --trace off

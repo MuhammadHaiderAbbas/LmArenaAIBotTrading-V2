@@ -82,6 +82,8 @@ test("admin can verify the audit chain", async ({ page }) => {
   await expect(page.getByTestId("integrity-result")).toContainText("audit_chain");
   await expect(page.getByTestId("integrity-result")).toContainText("append_only_triggers");
   await page.getByLabel("Reference").fill("PT-e2e-report");
+  await page.getByLabel("Evidence SHA-256").fill("ab".repeat(32));
+  await page.getByLabel("Review date").fill(new Date().toISOString().slice(0, 10));
   await page.getByRole("button", { name: "Record attestation" }).click();
   await expect(page.getByTestId("ops-gates")).toContainText("PT-e2e-report");
 });

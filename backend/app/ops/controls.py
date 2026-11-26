@@ -10,6 +10,8 @@ from app.models import SystemControl
 HEARTBEAT = "worker_heartbeat"
 LAST_BACKUP = "last_backup"
 LAST_RESTORE_DRILL = "last_restore_drill"
+LAST_OFFSITE_BACKUP = "last_offsite_backup"
+LAST_OFFSITE_ANCHOR = "last_offsite_anchor"
 ATTEST_PREFIX = "attestation:"
 
 

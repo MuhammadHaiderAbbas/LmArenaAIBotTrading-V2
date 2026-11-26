@@ -197,6 +197,17 @@ async def test_limit_and_stop_orders_fill_through_matcher(client):
     await ledger(client, h, aid)
 
 
+async def test_day_order_expiry_uses_the_calendar_not_utc_midnight(client, monkeypatch):
+    from app.trading import service as trading_service
+
+    close = datetime(2026, 11, 27, 18, 0, tzinfo=UTC)   # Black Friday early close
+    monkeypatch.setattr(trading_service, "day_expiry", lambda inst, at: close)
+    h, aid = await setup(client)
+    o = (await order(client, h, aid, type="LIMIT", limit_price="195.00", qty="1",
+                     time_in_force="DAY")).json()
+    assert o["status"] == "OPEN" and o["expires_at"].startswith("2026-11-27T18:00")
+
+
 async def test_matcher_skips_closed_markets_and_expires_orders(client):
     h, aid = await setup(client)
     o = (await order(client, h, aid, type="LIMIT", limit_price="205.00", qty="1", time_in_force="DAY")).json()

@@ -96,7 +96,10 @@ class MLService:
         await self.db.flush()
         self.db.add(ModelEvaluation(version_id=v.id, kind="walk_forward",
                                     status="eligible" if wf.eligible else "ineligible",
-                                    metrics={"oos": wf.oos, "gates": wf.gates}, created_by=user.id))
+                                    metrics={"oos": wf.oos, "gates": wf.gates,
+                                             "baselines": wf.baselines, "folds": wf.folds,
+                                             "calibration": wf.calibration, "data_source": source},
+                                    created_by=user.id))
         await self.db.flush()
         return v
 
@@ -117,15 +120,21 @@ class MLService:
             .order_by(ModelEvaluation.created_at.desc()).limit(1))
 
     async def promote(self, admin: User, v: ModelVersion) -> ModelVersion | None:
-        """Returns the previous champion (now retired), if any."""
-        if v.status != "candidate":
-            raise BusinessRuleViolation("Only candidate versions can be promoted")
-        if not v.eligible:
-            raise BusinessRuleViolation(f"Version is not eligible for promotion. {v.eligibility_note}",
-                                        details=[g for g in v.gates if not g["passed"]])
-        last = await self.latest_drift(v.id)
-        if last is not None and last.status == "drift":
-            raise BusinessRuleViolation("Latest drift check reports drift; retrain before promoting")
+        """Returns the previous champion (now retired), if any.
+
+        Every gate is re-derived at promotion time. A stale `eligible = true` on a
+        synthetic/non-tradable version is cleared rather than honoured.
+        """
+        from app.ml.promotion import evaluate_promotion
+        from app.ml.validation import REAL_TRAINING_SOURCES
+
+        if v.data_source not in REAL_TRAINING_SOURCES and v.eligible:
+            v.eligible = False
+            v.eligibility_note = "Synthetic or non-tradable training data cannot be promoted"
+        decision = await evaluate_promotion(self.db, v)
+        if not decision.ok:
+            raise BusinessRuleViolation("Version is not eligible for promotion. " + decision.failed_names,
+                                        details=decision.failed)
         previous = await self.champion(v.symbol, v.timeframe)
         now = datetime.now(UTC)
         if previous:
@@ -163,7 +172,7 @@ class MLService:
         model = await self.load(v)
         return float(model.predict_proba(row.reshape(1, -1))[0, 1])
 
-    async def drift_check(self, user: User, v: ModelVersion, days: int = 30) -> ModelEvaluation:
+    async def drift_check(self, user: User | None, v: ModelVersion, days: int = 30) -> ModelEvaluation:
         inst = await self.market.get(v.symbol)
         times, highs, lows, closes = await self.history(inst, days)
         horizon = int(v.metrics.get("horizon", 4))
@@ -176,7 +185,7 @@ class MLService:
         result["window_days"] = days
         result["samples"] = int(len(ds.y))
         ev = ModelEvaluation(version_id=v.id, kind="drift_check", status=result["status"], metrics=result,
-                             created_by=user.id)
+                             created_by=user.id if user is not None else None)
         self.db.add(ev)
         if result["status"] == "drift" and v.eligible:
             v.eligible = False   # reduce trading eligibility; never auto-retrain or auto-promote

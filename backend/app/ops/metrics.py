@@ -34,6 +34,8 @@ G = {name: Gauge(f"aurex_{name}", doc, registry=registry) for name, doc in {
     "worker_heartbeat_age_seconds": "Seconds since the background worker leader last completed a pass",
     "worker_is_leader": "1 if this process holds the worker lease",
     "last_backup_age_seconds": "Seconds since the last recorded backup",
+    "last_offsite_backup_age_seconds": "Seconds since the last verified off-site backup copy",
+    "last_offsite_anchor_age_seconds": "Seconds since the last verified off-site anchor copy",
     "last_restore_drill_age_seconds": "Seconds since the last successful restore drill",
     "last_anchor_age_seconds": "Seconds since the audit head was last anchored externally",
     "rate_limit_backend_errors": "Rate-limit backend (Redis) errors since start (limits failed open)",
@@ -63,6 +65,8 @@ async def collect() -> None:
             RiskDecision.approved.is_(False), RiskDecision.created_at >= text("now() - interval '1 hour'"))) or 0)
         G["audit_records"].set(await n(select(func.count()).select_from(AuditLog)) or 0)
         for gauge, key in (("worker_heartbeat_age_seconds", controls.HEARTBEAT), ("last_backup_age_seconds", controls.LAST_BACKUP),
+                           ("last_offsite_backup_age_seconds", controls.LAST_OFFSITE_BACKUP),
+                           ("last_offsite_anchor_age_seconds", controls.LAST_OFFSITE_ANCHOR),
                            ("last_restore_drill_age_seconds", controls.LAST_RESTORE_DRILL)):
             age = controls.age_seconds(await controls.get(db, key))
             G[gauge].set(age if age is not None else float("nan"))

@@ -33,3 +33,19 @@ def make_pdf(pages: list[str]) -> bytes:
         out += f"{off:010d} 00000 n \n".encode()
     out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
     return bytes(out)
+
+
+def make_scanned_pdf(text: str) -> bytes:
+    """Build a PDF whose only content is a raster image (no text layer)."""
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    image = Image.new("RGB", (1000, 300), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((30, 40), text, fill="black", font=ImageFont.load_default(size=34))
+    draw.text((30, 110), "Scanned quarterly report", fill="black",
+              font=ImageFont.load_default(size=26))
+    buf = BytesIO()
+    image.save(buf, "PDF", resolution=150)
+    return buf.getvalue()

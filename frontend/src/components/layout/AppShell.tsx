@@ -9,6 +9,7 @@ import { useSystemHalt } from "@/features/risk/hooks";
 import { isDemo } from "@/services/api";
 import { cn } from "@/lib/utils";
 import { NAV } from "./nav";
+import { PaperTradingBanner } from "./PaperTradingBanner";
 
 export function Logo({ className }: { className?: string }) {
   return (
@@ -101,6 +102,12 @@ export function AppShell() {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <PaperTradingBanner />
+        {isDemo && (
+          <div data-testid="demo-banner" className="print:hidden border-b border-info/40 bg-info/10 px-4 py-2 text-center text-xs font-medium text-info">
+            SIMULATED DATA — prices, accounts and ledger are generated in this browser. No real market data or money is used.
+          </div>
+        )}
         <header className="flex h-14 print:hidden shrink-0 items-center gap-3 border-b border-border bg-surface/80 px-4 backdrop-blur lg:px-6">
           <button className="text-muted lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Menu className="size-5" /></button>
           <div className="min-w-0 flex-1">

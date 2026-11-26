@@ -40,11 +40,33 @@ class QuoteRead(ORMModel):
     stale: bool
     tradable: bool
     age_seconds: int
+    # actual bid/ask | estimated_spread (real last, modelled spread)
+    # | reference (fixing) | simulated (demo only)
+    pricing: str = "actual"
 
 
 class InstrumentWithQuote(BaseModel):
     instrument: InstrumentRead
     quote: QuoteRead | None
+
+
+class PositioningRead(BaseModel):
+    symbol: str
+    venue_symbol: str
+    funding_rate: float
+    funding_bps: float
+    mark_price: float
+    index_price: float
+    open_interest: float
+    oi_change_pct: float
+    as_of: datetime
+    source: str
+
+
+class PositioningResponse(BaseModel):
+    available: bool
+    data: PositioningRead | None = None
+    reason: str | None = None
 
 
 class CandleRead(ORMModel):

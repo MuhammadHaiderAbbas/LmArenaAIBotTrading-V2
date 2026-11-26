@@ -5,13 +5,14 @@ interpretation, contradictions and open questions as schema-constrained JSON. No
 says is trusted: reports.build_report() keeps only claims whose quotes are found in the
 cited source text, and confidence is computed by code, not by the model.
 
-Credentials are resolved by the Anthropic SDK (ANTHROPIC_API_KEY, or an `ant auth login`
-profile). Any failure — refusal, API error, missing credentials, malformed output —
-degrades to the offline extractive engine with a warning in the report.
+Credentials come from AUREX_CLAUDE_API_KEY / AUREX_CLAUDE_API_KEY_FILE (server-side,
+preferred) or from the SDK's ANTHROPIC_API_KEY fallback. Any failure — refusal, API error,
+missing credentials, malformed output — degrades to the offline engine with a warning.
 """
 
 import json
 import logging
+import os
 from typing import Any
 
 import anthropic
@@ -93,8 +94,25 @@ def set_client(client: Any) -> None:
 def _get_client() -> Any:
     global _client
     if _client is None:
-        _client = anthropic.AsyncAnthropic(timeout=get_settings().llm_timeout_seconds)
+        s = get_settings()
+        kwargs: dict[str, Any] = {"timeout": s.llm_timeout_seconds}
+        if s.claude_api_key:
+            kwargs["api_key"] = s.claude_api_key
+        _client = anthropic.AsyncAnthropic(**kwargs)
     return _client
+
+
+def credential_status() -> dict[str, Any]:
+    """Report *where* a key came from, never the key itself."""
+    s = get_settings()
+    if s.claude_api_key:
+        source = "server_setting"
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        source = "environment"
+    else:
+        source = "none"
+    return {"configured": source != "none", "source": source,
+            "model": s.llm_model if source != "none" else None}
 
 
 def render_sources(evidence: list[Evidence]) -> str:

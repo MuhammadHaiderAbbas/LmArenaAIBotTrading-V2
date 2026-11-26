@@ -26,7 +26,8 @@ class FrankfurterProvider:
 
     @staticmethod
     def _pair(inst: InstrumentRef) -> tuple[str, str]:
-        base, quote = inst.provider_symbol.split("/")
+        # Migrated rows use OANDA's GBP_USD form; ECB needs the ISO GBP/USD pair.
+        base, quote = inst.provider_symbol.replace("_", "/").split("/")
         return base, quote
 
     async def _get(self, path: str, params: dict):
@@ -70,4 +71,4 @@ class FrankfurterProvider:
         # ECB publishes around 16:00 CET (~15:00 UTC).
         as_of = datetime.combine(date.fromisoformat(last_day), time(15, 0), tzinfo=UTC)
         return RawQuote(last=last, bid=last, ask=last, prev_close=prev, as_of=as_of,
-                        source=self.name)
+                        source=self.name, pricing="reference")

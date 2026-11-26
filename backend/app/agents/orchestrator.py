@@ -23,6 +23,7 @@ from app.agents.base import (
 )
 from app.agents.consensus import decide
 from app.core.errors import BusinessRuleViolation, NotFound
+from app.market.positioning import PositioningService
 from app.market.service import MarketService, ProviderUnavailable, fx_rate
 from app.models import (
     AccountStatus,
@@ -36,6 +37,7 @@ from app.models import (
     TradingAccount,
     User,
 )
+from app.research.fundamentals import FundamentalService
 from app.services.ledger_service import LedgerService
 
 ORDER = ["technical", "quant", "regime", "fundamental", "news", "sentiment", "ml", "portfolio", "risk"]
@@ -101,14 +103,28 @@ class Orchestrator:
                               q.tradable, q.source, q.as_of)
         except ProviderUnavailable:
             quote = None
+        fundamentals = None
+        if inst.asset_class in ("STOCK", "ETF"):
+            try:
+                analysis = await FundamentalService().analyse(
+                    inst, float(q.last) if quote else None, self.db)
+                fundamentals = analysis.as_dict()
+            except Exception:  # noqa: BLE001 - optional analysis must not sink an AI run
+                fundamentals = None
         account = await self._account(user, account_id)
         fx = await self._fx(inst.quote_currency, account.currency) if account else None
         docs, macro = await self._docs(inst, now)
+        try:
+            pos = await PositioningService().snapshot(inst.symbol)
+        except Exception:  # noqa: BLE001 - an optional feed must never sink an AI run
+            pos = None
         return AgentContext(
             InstrumentSnap(inst.symbol, inst.asset_class, inst.market, inst.quote_currency,
                            inst.price_decimals, inst.lot_size),
             now, b1h, b1d, quote, docs, macro, account, fx, open_positions=0,
-            ml=await self._ml(inst.symbol, b1h))
+            ml=await self._ml(inst.symbol, b1h),
+            positioning=pos.as_dict() if pos else None,
+            fundamentals=fundamentals)
 
     async def _ml(self, symbol: str, bars: list[Bar]) -> dict[str, Any] | None:
         from app.ml.service import ArtifactIntegrityError, MLService

@@ -1,19 +1,19 @@
-"""The background worker: order matcher, breaker monitor, autopilot cycles and audit anchoring.
+"""The background jobs: order matcher, breaker monitor, autopilot, model drift and anchoring.
 
-Every API replica runs this loop, but only the replica holding a Postgres *session* advisory lock
-does the work (leader election with no extra infrastructure). If the leader dies its connection
-closes, the lock is released, and another replica takes over on its next pass. The matcher was
-already safe to run concurrently (FOR UPDATE SKIP LOCKED); leadership additionally keeps
-autopilot cycles and anchors from running twice.
+Locally this runs as a loop inside the API. Deployed API replicas leave the loop off and an
+external scheduler calls `one_pass()` through `python -m app.cli worker-once`. Both paths take
+the same Postgres *session* advisory lock, so a scheduled tick can never double-run a pass that
+an API replica is already doing. The lock is released when the session ends, including when a
+scheduled process exits.
 """
 
 import asyncio
 import logging
 import os
 import socket
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import get_settings
@@ -64,6 +64,64 @@ lease = Lease()
 state = {"passes": 0, "last_error": None, "leader": False}
 
 
+async def ml_drift_pass(s) -> dict:
+    """Check due champion/eligible models for drift. Never retrains or promotes.
+
+    Each version is checked in its own transaction so one unavailable provider cannot
+    abort the rest of the scheduler pass. A failed check is counted, not hidden.
+    """
+    from app.ml.service import MLService
+    from app.ml.validation import REAL_TRAINING_SOURCES
+    from app.models import ModelEvaluation, ModelVersion
+    from app.services.audit_service import AuditContext, AuditService
+
+    out = {"enabled": bool(s.ml_drift_monitoring_enabled), "checked": 0, "drift": 0,
+           "warning": 0, "skipped": 0, "revoked": 0, "errors": 0}
+    if not out["enabled"]:
+        return out
+    cutoff = datetime.now(UTC) - timedelta(seconds=s.ml_drift_check_interval_seconds)
+    async with SessionLocal() as db:
+        ids = list(await db.scalars(select(ModelVersion.id).where(
+            or_(ModelVersion.status == "champion", ModelVersion.eligible.is_(True)))))
+        last = {row[0]: row[1] for row in await db.execute(
+            select(ModelEvaluation.version_id, func.max(ModelEvaluation.created_at))
+            .where(ModelEvaluation.kind == "drift_check")
+            .group_by(ModelEvaluation.version_id))}
+    for version_id in ids:
+        if version_id in last and last[version_id] > cutoff:
+            out["skipped"] += 1
+            continue
+        async with SessionLocal() as db:
+            try:
+                v = await db.get(ModelVersion, version_id)
+                if v is None:
+                    continue
+                if v.eligible and v.data_source not in REAL_TRAINING_SOURCES:
+                    # Heal legacy rows whose cached flag outlived the real-data gate.
+                    v.eligible = False
+                    v.eligibility_note = "Synthetic or non-tradable training data cannot be promoted"
+                    await AuditService(db).record(
+                        AuditContext(), "ml.eligibility_revoked", resource_type="model_version", resource_id=v.id,
+                        details={"reason": v.data_source, "via": "worker"})
+                    await db.commit()
+                    out["revoked"] += 1
+                    continue
+                ev = await MLService(db).drift_check(None, v, s.ml_drift_check_window_days)
+                await AuditService(db).record(
+                    AuditContext(), "ml.drift_check_scheduled", resource_type="model_version", resource_id=v.id,
+                    details={"status": ev.status, "version": v.version,
+                             "window_days": s.ml_drift_check_window_days, "via": "worker"})
+                await db.commit()
+                out["checked"] += 1
+                if ev.status in ("drift", "warning"):
+                    out[ev.status] += 1
+            except Exception as e:  # noqa: BLE001 - one bad version must not stop matcher/anchoring
+                await db.rollback()
+                out["errors"] += 1
+                log.warning("scheduled drift check failed for model version %s: %s", version_id, e)
+    return out
+
+
 async def one_pass() -> dict:
     """A single leader pass. Separated from the loop so it can be tested directly."""
     from app.binary.service import BinaryService
@@ -84,6 +142,7 @@ async def one_pass() -> dict:
             prof = await RiskService(db).profile(acct.id, lock=True)
             await run_cycle(db, acct, prof)
             await db.commit()
+    drift = await ml_drift_pass(s)
     anchored = False
     if anchoring.sinks_configured():
         async with SessionLocal() as db:
@@ -92,7 +151,7 @@ async def one_pass() -> dict:
                 await anchoring.anchor_now(db)
                 await db.commit()
                 anchored = True
-    return {"matcher": stats, "binary": binaries, "anchored": anchored}
+    return {"matcher": stats, "binary": binaries, "drift": drift, "anchored": anchored}
 
 
 async def heartbeat(error: str | None = None) -> None:
@@ -100,6 +159,30 @@ async def heartbeat(error: str | None = None) -> None:
         await controls.put(db, controls.HEARTBEAT, {"at": datetime.now(UTC).isoformat(), "instance": INSTANCE,
                                                    "passes": state["passes"], "last_error": error})
         await db.commit()
+
+
+async def run_once() -> dict | None:
+    """One scheduler tick. Returns None if another instance already holds the lease."""
+    if not await lease.acquire():
+        log.info("scheduler tick skipped: another worker holds the lease")
+        return None
+    try:
+        out = await one_pass()
+        state["passes"] += 1
+        state["last_error"] = None
+        await heartbeat()
+        log.info("scheduler pass: %s", out)
+        return out
+    except Exception as e:  # noqa: BLE001 - record the failure before the scheduler sees it
+        state["last_error"] = e.__class__.__name__
+        try:
+            await heartbeat(state["last_error"])
+        except Exception:  # noqa: BLE001 - database may be unavailable during a pause/restart
+            log.warning("could not record failed scheduler heartbeat")
+        raise
+    finally:
+        await lease.release()
+        await engine.dispose()
 
 
 async def run(interval: float) -> None:
@@ -113,7 +196,8 @@ async def run(interval: float) -> None:
             state["passes"] += 1
             state["last_error"] = None
             await heartbeat()
-            if out["matcher"]["filled"] or out["matcher"]["expired"] or out["anchored"]:
+            if (out["matcher"]["filled"] or out["matcher"]["expired"] or out["anchored"]
+                    or out["drift"]["drift"] or out["drift"]["errors"]):
                 log.info("worker pass: %s", out)
         except asyncio.CancelledError:
             await lease.release()

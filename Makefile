@@ -24,7 +24,7 @@ frontend-dev:
 	cd frontend && npm run dev
 frontend-build:
 	cd frontend && npm run build
-e2e:
-	cd frontend && npx playwright test --trace off
+e2e:             ## Build the production bundle, then run Playwright against vite preview
+	cd frontend && npm run e2e
 
 lint: backend-test frontend-build

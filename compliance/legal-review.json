@@ -1,0 +1,15 @@
+{
+  "signed_off": false,
+  "reviewer": null,
+  "reviewed_at": null,
+  "evidence_sha256": null,
+  "evidence_path": "docs/compliance/legal-review.md",
+  "valid_for_days": 90,
+  "scope": [
+    "marketing copy and public claims",
+    "market-data providers and data fields",
+    "privacy disclosures and personal-data processing",
+    "public status and feedback copy"
+  ],
+  "note": "UK counsel/DPO must re-review and sign before any change matching compliance/protected-paths.txt. This is intentionally unsigned for the soft launch."
+}

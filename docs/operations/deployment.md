@@ -22,9 +22,10 @@ Internet ─443─► web (Caddy, TLS) ─► backend ×2 (FastAPI) ─► manag
                 prometheus + grafana (profile "monitoring", Grafana on 127.0.0.1 only)
 ```
 
-- **Replicas:** run as many backend replicas as you like. Exactly one holds the background
-  worker lease (a Postgres advisory lock); if it dies, another takes over within one matcher
-  interval.
+- **Replicas:** run as many backend replicas as you like. They serve API traffic only
+  (`AUREX_BACKGROUND_WORKER=false`). Matcher, monitor, autopilot and audit anchor run as an
+  external scheduler; the Postgres advisory lock prevents a scheduled tick from overlapping
+  another runner.
 - **Database:** use a managed PostgreSQL with point-in-time recovery. Our own logical backups
   and restore drills are an *additional*, provider-independent layer.
 - **Secrets:** stored as files under `infrastructure/deployment/secrets/` (created by
@@ -59,6 +60,37 @@ Internet ─443─► web (Caddy, TLS) ─► backend ×2 (FastAPI) ─► manag
    storage with retention or object lock (for example a daily `rclone sync`). The anchors only
    protect against database rewrites if they are kept where database administrators cannot
    edit them.
+
+## Edge API, scheduler and CI/CD (Supabase)
+
+The browser-facing API is the Supabase Edge Function set in `edge-functions/`. It is deployed
+from the exact local sources by `scripts/deploy-edge-functions.sh` (Management API), which is
+called by `.github/workflows/deploy.yml` on a version tag via `release.yml`, or manually from
+the Actions tab. `scripts/supabase-health.sh` then polls `/functions/v1/health` until the
+database probe is healthy — a cold start after a Supabase free-tier pause is handled by
+retrying rather than failing the deploy.
+
+Background jobs run from `.github/workflows/scheduler.yml` every five minutes. Each tick runs
+`python -m app.cli worker-once`, which takes the same advisory lock as the old in-process loop
+and writes the same heartbeat. `/api/v1/system/ready` watches that heartbeat when
+`AUREX_EXTERNAL_SCHEDULER=true`.
+
+Required GitHub secrets/variables (names only — never commit values):
+
+| Name | Used for |
+|---|---|
+| `SUPABASE_PROJECT_REF` (repo variable or secret) | Edge deploy, wake and health checks |
+| `SUPABASE_ACCESS_TOKEN` | Management API deploy + paused-project restore |
+| `SUPABASE_DB_URL` | Scheduler's database connection |
+| `AUREX_REDIS_URL` | Shared Python rate limits (optional but recommended) |
+| `AUREX_AUDIT_ANCHOR_WEBHOOK_URL` / `AUREX_AUDIT_ANCHOR_WEBHOOK_SECRET` | External audit anchoring from the scheduler |
+| `AUREX_SSH_HOST` / `AUREX_SSH_USER` / `AUREX_SSH_KEY` / `AUREX_DEPLOY_DIR` / `AUREX_PUBLIC_DOMAIN` | Optional Python-host rollout and readiness probe |
+
+Supabase free projects pause after inactivity. An application cannot wake a paused project
+because its functions and database are not running. The scheduler and deploy workflows call
+`scripts/wake-supabase.sh`, which checks project status and POSTs `/restore` when paused using
+`SUPABASE_ACCESS_TOKEN`. If that token is not configured, the scripts print a notice and the
+health check still fails loudly so the pause is visible.
 
 ## Upgrades and rollback
 - **Upgrade:** set `AUREX_VERSION` to the new tag, then `docker compose ... pull && docker compose ... up -d`.

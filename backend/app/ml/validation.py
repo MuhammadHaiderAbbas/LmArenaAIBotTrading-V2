@@ -158,6 +158,21 @@ def walk_forward(ds: Dataset, algorithm: str, asset_class: str, n_folds: int = 5
 
 
 MAX_PLAUSIBLE_SHARPE, MAX_PLAUSIBLE_AUC = 4.0, 0.75
+# Only tradable market feeds may produce a promotable model. "synthetic" is the demo
+# generator; "ecb_reference" is a real but non-executable daily fixing, so neither can
+# underwrite a trading model. Unknown provider names are fail-closed too.
+REAL_TRAINING_SOURCES = frozenset({"coinbase", "finnhub", "oanda"})
+
+
+def recheck_gates(metrics: dict[str, Any], data_source: str = "synthetic") -> list[dict[str, Any]]:
+    """Recompute the nine gates from persisted walk-forward evidence at promotion time.
+
+    Stored `eligible` flags and gate results are cached decisions, not proof. Rebuilding the
+    gates from recorded out-of-sample metrics with the version's *actual* data source means a
+    stale approval cannot survive a synthetic/provider mismatch.
+    """
+    return gates(WalkForward(metrics.get("folds", []), metrics["oos"], metrics["baselines"],
+                             metrics.get("calibration", []), {}, 0), data_source)
 
 
 def gates(wf: WalkForward, data_source: str = "synthetic") -> list[dict[str, Any]]:
@@ -183,5 +198,6 @@ def gates(wf: WalkForward, data_source: str = "synthetic") -> list[dict[str, Any
         g("Plausible performance", o["strategy_sharpe"] <= MAX_PLAUSIBLE_SHARPE and o["auc"] <= MAX_PLAUSIBLE_AUC,
           f"Sharpe {o['strategy_sharpe']:.1f}, AUC {o['auc']:.2f}",
           f"Sharpe ≤ {MAX_PLAUSIBLE_SHARPE:.0f} and AUC ≤ {MAX_PLAUSIBLE_AUC:.2f}"),
-        g("Trained on real market data", data_source != "synthetic", data_source, "not synthetic"),
+        g("Trained on real market data", data_source in REAL_TRAINING_SOURCES, data_source,
+          "one of " + ", ".join(sorted(REAL_TRAINING_SOURCES))),
     ]

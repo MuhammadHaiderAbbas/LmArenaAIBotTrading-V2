@@ -58,6 +58,7 @@ interface State {
   mlEvals: { id: string; version_id: string; kind: string; status: string; metrics: Record<string, unknown>; created_at: string }[];
   opsAnchors?: { at: string; last_record_id: number; head_hash: string; records: number }[];
   opsAttestations?: Record<string, { at: string; by: string; reference: string; label: string }>;
+  feedback?: { id: number; created_at: string; category: string; message: string; reply_email: string | null; status: string }[];
   riskProfiles: Record<string, DRisk>; riskDecisions: DDecision[]; systemHalt: { halted: boolean; reason: string | null; since: string | null };
   riskEvents: { id: string; account_id: string | null; type: string; message: string; detail: Record<string, unknown>; created_at: string }[];
   binaries?: DBinary[];
@@ -77,12 +78,13 @@ function load(): State {
       memory.mlModels ??= []; memory.mlVersions ??= []; memory.mlEvals ??= []; memory.backtests ??= [];
       memory.orders ??= []; memory.executions ??= []; memory.positions ??= []; memory.snapshots ??= [];
       memory.binaries ??= [];
+      memory.feedback ??= [];
       memory.riskProfiles ??= {}; memory.riskDecisions ??= []; memory.riskEvents ??= []; memory.systemHalt ??= { halted: false, reason: null, since: null };
       for (const o of memory.orders) { o.stop_loss ??= null; o.take_profit ??= null; o.parent_order_id ??= null; o.oco_group ??= null; o.proposal_id ??= null; }
       return memory;
     }
   } catch { /* storage unavailable: fall back to memory */ }
-  return (memory = { users: [], sessions: [], accounts: [], txns: [], audit: [], settings: {}, watchlists: {}, docs: [], chunks: [], reports: [], aiRuns: [], aiAgents: {}, mlModels: [], mlVersions: [], mlEvals: [], backtests: [], orders: [], executions: [], positions: [], snapshots: [], riskProfiles: {}, riskDecisions: [], riskEvents: [], systemHalt: { halted: false, reason: null, since: null } });
+  return (memory = { users: [], sessions: [], accounts: [], txns: [], audit: [], settings: {}, watchlists: {}, docs: [], chunks: [], reports: [], feedback: [], aiRuns: [], aiAgents: {}, mlModels: [], mlVersions: [], mlEvals: [], backtests: [], orders: [], executions: [], positions: [], snapshots: [], riskProfiles: {}, riskDecisions: [], riskEvents: [], systemHalt: { halted: false, reason: null, since: null } });
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(memory)); } catch { /* ignore */ } }
 const refreshStore = {
@@ -657,7 +659,7 @@ async function placeOrder(s: State, user: DUser, a: DAccount, b: OrderBody, sour
   if (b.stop_loss != null && b.take_profit != null && +String(b.stop_loss) >= +String(b.take_profit)) throw rule("stop_loss must be below take_profit");
   processOpen(s);
   const t = new Date();
-  const expires = type === "MARKET" ? null : tif === "DAY" ? new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate() + 1)).toISOString() : new Date(t.getTime() + 30 * 864e5).toISOString();
+  const expires = type === "MARKET" ? null : tif === "DAY" ? new Date(mkt.dayExpiry(inst.market as mkt.MarketKey, t.getTime())).toISOString() : new Date(t.getTime() + 30 * 864e5).toISOString();
   const str = (v: unknown) => (v == null ? null : String(v));
   const o = newOrder({ account_id: a.id, user_id: user.id, symbol: inst.symbol, side, type, quantity: qty, limit_price: str(b.limit_price), stop_price: str(b.stop_price),
     time_in_force: tif, client_order_id: coid, source, expires_at: expires, stop_loss: str(b.stop_loss), take_profit: str(b.take_profit), proposal_id: proposalId });
@@ -783,7 +785,7 @@ async function runAnalysis(s: State, user: DUser, symbol: string, accountId: str
 // ---- binary options (mirror of backend app/binary) ---------------------------------------
 const BINARY_PAYOUT = 0.8, BINARY_EXPIRIES = [60, 300, 900, 3600, 86400], BINARY_VOID_AFTER_S = 600;
 const BINARY_NOTICE = "Paper simulation only. Binary options are banned for retail customers in the UK (FCA, since April 2019) and restricted across the EU/EEA. The payout is below even money, so a forecaster who is right half the time loses money; you need to win more often than the break-even rate just to stand still.";
-const binaryConfig = () => ({ payout_rate: BINARY_PAYOUT, expiries: BINARY_EXPIRIES, break_even_win_rate: 1 / (1 + BINARY_PAYOUT),
+const binaryConfig = () => ({ paper_only: true, payout_rate: BINARY_PAYOUT, expiries: BINARY_EXPIRIES, break_even_win_rate: 1 / (1 + BINARY_PAYOUT),
   coin_flip_expected_return: 0.5 * BINARY_PAYOUT - 0.5, minimum_stake: MIN_ORDER_VALUE.toFixed(2), void_after_seconds: BINARY_VOID_AFTER_S });
 const midOf = (q: { bid: string; ask: string }) => (+q.bid + +q.ask) / 2;
 const binaryRead = (b: DBinary) => { const { user_id: _u, ...rest } = b; return { ...rest, potential_return: (+b.stake * (1 + b.payout_rate)).toFixed(2) }; };
@@ -1324,7 +1326,13 @@ async function verifyChain(s: State) {
   }
   return { valid: true, records_checked: s.audit.length };
 }
-const ATTESTABLE: Record<string, string> = { pentest: "External penetration test completed and findings resolved", broker_sandbox: "Broker sandbox integration certified end to end" };
+const ATTESTABLE: Record<string, string> = {
+  pentest: "External penetration test completed and findings resolved",
+  solicitor: "UK solicitor has reviewed the regulatory perimeter",
+  dpia: "GDPR DPIA approved and residual actions closed",
+  privacy_policy: "Privacy policy approved and published",
+  broker_sandbox: "Broker sandbox integration certified end to end",
+};
 const opsRoutes: [string, RegExp, Handler][] = [
   ["GET", /^\/admin\/ops\/status$/, async (c) => {
     admin(c);
@@ -1339,6 +1347,8 @@ const opsRoutes: [string, RegExp, Handler][] = [
       g("environment", "Running with production settings", false, "environment = demo (static, in your browser)"),
       g("admin_mfa", "Two-factor authentication enforced for every administrator", false, `not enforced in the demo${noMfa.length ? `; without 2FA: ${noMfa.join(", ")}` : ""}`),
       g("backups", "Database backup within 26 h", false, "not applicable: the demo stores data in this browser"),
+      g("offsite_backups", "Verified off-site backup within 30 h", false, "not applicable in the demo"),
+      g("offsite_anchors", "Verified off-site audit anchor within 30 h", false, "not applicable in the demo"),
       g("restore_drill", "Restore drill passed within 30 days", false, "not applicable in the demo"),
       g("anchoring", "Audit head anchored externally within 2 h", lastAge != null && lastAge <= 2, last ? `sink: browser (simulated); last anchor ${lastAge!.toFixed(2)} h ago` : "sink: browser (simulated); never anchored"),
       g("monitoring", "Metrics endpoint enabled for monitoring", false, "no metrics in the demo"),
@@ -1381,9 +1391,12 @@ const opsRoutes: [string, RegExp, Handler][] = [
   ["POST", /^\/admin\/ops\/attestations$/, async (c) => {
     const { user } = admin(c);
     const gate = String(c.body.gate ?? ""), reference = String(c.body.reference ?? "").trim();
-    if (!(gate in ATTESTABLE)) throw bad("gate must be pentest or broker_sandbox", "gate");
+    const sha = String(c.body.evidence_sha256 ?? "").trim(), reviewed = String(c.body.reviewed_at ?? "").trim();
+    if (!(gate in ATTESTABLE)) throw bad("gate must be an attestable go-live item", "gate");
     if (reference.length < 3) throw bad("reference is required", "reference");
-    const value = { at: now(), by: user.email, reference, label: ATTESTABLE[gate]! };
+    if (!/^[0-9a-f]{64}$/.test(sha)) throw bad("evidence_sha256 must be a 64-character hex digest", "evidence_sha256");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(reviewed)) throw bad("reviewed_at must be an ISO date", "reviewed_at");
+    const value = { at: now(), by: user.email, reference, evidence_sha256: sha, reviewed_at: reviewed, label: ATTESTABLE[gate]! };
     (c.s.opsAttestations ??= {})[gate] = value;
     await audit(c.s, user.id, "ops.attestation", { type: "gate", id: gate, details: value });
     return json(200, value);
@@ -1397,6 +1410,35 @@ const routes: [string, RegExp, Handler][] = [
   ...analyticsRoutes,
   ["GET", /^\/system\/health$/, () => json(200, { status: "ok", database: "ok" })],
   ["GET", /^\/system\/info$/, () => json(200, { name: "AUREX AI", version: "0.2.0-demo", environment: "demo", trading_mode: "PAPER", live_trading_enabled: false, registration_open: true, supported_currencies: CURRENCIES })],
+  ["GET", /^\/system\/status$/, () => json(200, {
+    name: "AUREX AI", version: "0.2.0-demo", environment: "demo", phase: "soft_launch", status: "operational",
+    trading_mode: "PAPER", live_trading_enabled: false,
+    checks: { database: "browser storage", schema: "ok", redis: "not configured", worker: "simulated" },
+    announcements: [
+      "Paper trading only — all balances are virtual and no real orders are placed.",
+      "Market data may be delayed or simulated; never use AUREX for investment decisions.",
+      "Send feedback from the Feedback page; it is reviewed during the soft launch.",
+    ],
+    feedback_enabled: true, legal_review_required_for: ["marketing", "data-provider", "privacy-disclosure"],
+  })],
+  ["POST", /^\/feedback$/, async (c) => {
+    const category = String(c.body.category ?? "");
+    const message = String(c.body.message ?? "").trim();
+    const email = c.body.reply_email == null ? null : String(c.body.reply_email).trim();
+    if (!["bug", "idea", "data_issue", "other"].includes(category)) throw bad("invalid category", "category");
+    if (message.length < 10 || message.length > 2000) throw bad("message must be 10-2000 characters", "message");
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw bad("invalid email", "reply_email");
+    const list = (c.s.feedback ??= []);
+    const row = { id: list.length + 1, created_at: now(), category, message, reply_email: email, status: "new" };
+    list.push(row);
+    await audit(c.s, null, "feedback.submitted", { type: "feedback", id: String(row.id), details: { category } });
+    return json(201, row);
+  }],
+  ["GET", /^\/admin\/feedback$/, async (c) => {
+    admin(c);
+    const items = [...(c.s.feedback ?? [])].reverse();
+    return json(200, { items, total: items.length, limit: 50, offset: 0 });
+  }],
 
   ["POST", /^\/auth\/register$/, async ({ s, body }) => {
     const email = String(body.email ?? "").trim().toLowerCase();
@@ -1826,12 +1868,22 @@ const routes: [string, RegExp, Handler][] = [
     if (!v) throw new HttpError(404, "not_found", "Model version not found");
     return json(200, mlDetail(c.s, v));
   }],
-  ["POST", /^\/ml\/versions\/([\w-]+)\/promote$/, (c) => {
-    admin(c);
+  ["POST", /^\/ml\/versions\/([\w-]+)\/promote$/, async (c) => {
+    const { user } = admin(c);
     const v = c.s.mlVersions.find((x) => x.id === c.params[0]);
     if (!v) throw new HttpError(404, "not_found", "Model version not found");
     if (v.status !== "candidate") throw new HttpError(422, "business_rule_violation", "Only candidate versions can be promoted");
-    throw new HttpError(422, "business_rule_violation", `Version is not eligible for promotion. ${v.eligibility_note}`, v.gates.filter((g: { passed: boolean }) => !g.passed));
+    // Every static-demo candidate is trained on labelled synthetic data. Even a stale
+    // eligible flag must never create a champion here; RF/LightGBM are backend-only.
+    if (v.data_source === "synthetic" || !v.eligible) {
+      await audit(c.s, user.id, "ml.promote", { type: "model_version", id: v.id, outcome: "failure",
+        details: { reason: "synthetic_only", version: v.version } });
+      throw new HttpError(422, "business_rule_violation",
+        "Synthetic demo models cannot be promoted. Train on real data in the AUREX backend.",
+        v.gates.filter((g: { passed: boolean }) => !g.passed));
+    }
+    throw new HttpError(422, "business_rule_violation", `Version is not eligible for promotion. ${v.eligibility_note}`,
+      v.gates.filter((g: { passed: boolean }) => !g.passed));
   }],
   ["POST", /^\/ml\/versions\/([\w-]+)\/retire$/, async (c) => {
     const { user } = admin(c);

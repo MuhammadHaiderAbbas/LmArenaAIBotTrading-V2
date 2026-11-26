@@ -1,16 +1,43 @@
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.database.session import SessionLocal
+from app.ml.validation import recheck_gates
+from app.models import ModelEvaluation, ModelVersion
 from tests.conftest import API, admin_headers, auth_headers
 
 TRAIN = {"symbol": "BTC-USD", "algorithm": "logistic", "horizon": 4, "days": 60}
 
 
-async def force_eligible(version_id: str):
-    """Simulate a version that passed every gate on real market data."""
+async def force_eligible(version_id: str, source: str = "coinbase"):
+    """Simulate a version that genuinely passed every gate on real, tradable candles."""
     async with SessionLocal() as db:
-        await db.execute(text("UPDATE model_versions SET eligible = true, data_source = 'coinbase', "
-                              "eligibility_note = 'All validation gates passed' WHERE id = :id"), {"id": version_id})
+        v = await db.get(ModelVersion, version_id)
+        ev = await db.scalar(select(ModelEvaluation).where(
+            ModelEvaluation.version_id == v.id, ModelEvaluation.kind == "walk_forward")
+            .order_by(ModelEvaluation.created_at.desc()).limit(1))
+        metrics = dict(v.metrics)
+        oos = dict(metrics["oos"])
+        oos.update({"strategy_net_return": 0.20, "brier": 0.20, "brier_climatology": 0.25,
+                    "ece": 0.03, "strategy_sharpe": 1.5, "strategy_trades": 40, "auc": 0.58})
+        metrics["oos"] = oos
+        # Baselines are time-dependent on the synthetic feed; pin them so the helper is
+        # deterministic regardless of when the suite runs.
+        metrics["baselines"] = dict(metrics["baselines"],
+                                    buy_hold={"net_return": 0.05}, momentum={"net_return": 0.10})
+        folds = [dict(f, beats_buy_hold=(i < 4)) for i, f in enumerate(metrics["folds"])]
+        metrics["folds"] = folds
+        metrics["data_source"] = source
+        passed = recheck_gates(metrics, source)
+        assert all(g["passed"] for g in passed)
+        v.data_source, v.gates, v.metrics = source, passed, metrics
+        v.eligible, v.eligibility_note = True, "All validation gates passed"
+        ev.status = "eligible"
+        ev.metrics = {"oos": oos, "gates": passed, "baselines": metrics["baselines"],
+                      "folds": folds, "calibration": metrics["calibration"], "data_source": source}
+        await db.execute(text(
+            "UPDATE market_candles SET source = :source WHERE instrument_id = "
+            "(SELECT id FROM instruments WHERE symbol = :symbol) AND timeframe = '1h'"),
+            {"source": source, "symbol": v.symbol})
         await db.commit()
 
 
@@ -41,6 +68,50 @@ async def test_training_is_admin_only_and_never_auto_promotes(client):
     assert bad.status_code == 422
 
 
+async def test_stale_eligible_synthetic_model_is_unpromotable(client):
+    """A legacy `eligible = true` row must not override synthetic provenance."""
+    ah = await admin_headers(client)
+    v = (await client.post(f"{API}/ml/train", headers=ah, json=TRAIN)).json()
+    async with SessionLocal() as db:
+        await db.execute(text("UPDATE model_versions SET eligible = true, "
+                              "eligibility_note = 'All validation gates passed' WHERE id = :id"),
+                         {"id": v["id"]})
+        await db.commit()
+
+    r = await client.post(f"{API}/ml/versions/{v['id']}/promote", headers=ah)
+    assert r.status_code == 422
+    failed = {c["name"] for c in r.json()["error"]["details"]}
+    assert {"Real market data source", "Real candles in training window"} <= failed
+    after = (await client.get(f"{API}/ml/versions/{v['id']}", headers=ah)).json()
+    assert after["eligible"] is False and "Synthetic" in after["eligibility_note"]
+    assert (await client.get(f"{API}/ml/champion?symbol=BTC-USD", headers=ah)).status_code == 404
+    audit = (await client.get(f"{API}/admin/audit?action=ml.promote", headers=ah)).json()
+    assert audit["items"][0]["outcome"] == "failure"      # blocked attempts are recorded
+
+
+async def test_promotion_recomputes_gates_from_evidence(client):
+    """Flipping stored gate flags cannot outvote the recorded out-of-sample metrics."""
+    ah = await admin_headers(client)
+    v = (await client.post(f"{API}/ml/train", headers=ah, json=TRAIN)).json()
+    await force_eligible(v["id"])
+    async with SessionLocal() as db:
+        version = await db.get(ModelVersion, v["id"])
+        metrics = dict(version.metrics)
+        oos = dict(metrics["oos"], strategy_sharpe=9.0, auc=0.95)
+        metrics["oos"] = oos
+        fake = [dict(g, passed=True) for g in version.gates]
+        version.metrics, version.gates = metrics, fake
+        ev = await db.scalar(select(ModelEvaluation).where(ModelEvaluation.version_id == version.id))
+        ev.metrics = dict(ev.metrics, oos=oos, gates=fake)
+        await db.commit()
+
+    r = await client.post(f"{API}/ml/versions/{v['id']}/promote", headers=ah)
+    assert r.status_code == 422
+    failed = {c["name"] for c in r.json()["error"]["details"]}
+    assert {"Walk-forward gates on real data", "Validation evidence consistent"} <= failed
+    assert (await client.get(f"{API}/ml/champion?symbol=BTC-USD", headers=ah)).status_code == 404
+
+
 async def test_promotion_lifecycle_and_ml_agent(client):
     ah = await admin_headers(client)
     acct = (await client.post(f"{API}/accounts", headers=ah, json={"name": "Paper"})).json()
@@ -64,7 +135,8 @@ async def test_promotion_lifecycle_and_ml_agent(client):
     champ = (await client.get(f"{API}/ml/champion?symbol=BTC-USD", headers=ah)).json()
     assert champ["id"] == v2["id"]
     audit = (await client.get(f"{API}/admin/audit?action=ml.promote", headers=ah)).json()
-    assert audit["total"] == 2 and audit["items"][0]["details"]["retired"] == v1["id"]
+    assert audit["total"] == 3       # two promotions, plus the audited refusal to re-promote
+    assert audit["items"][0]["details"]["retired"] == v1["id"]
 
     assert (await client.post(f"{API}/ml/versions/{v2['id']}/retire", headers=ah)).status_code == 200
     run = (await client.post(f"{API}/ai/run", headers=ah, json={"symbol": "BTC-USD"})).json()

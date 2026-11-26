@@ -52,6 +52,26 @@ The matcher, breaker monitor, protective stops, autopilots and anchoring are not
   "truncated") means the database audit chain no longer matches what was published. Treat it
   as a security incident: preserve evidence and halt.
 
+## Alert: AurexOffsiteBackupStale / AurexOffsiteAnchorStale
+- Check the recorded control: Operations → status → `offsite.backups` / `offsite.anchors`, or
+  the `aurex_last_offsite_*_age_seconds` gauges.
+- Check the remote with `rclone ls "$OFFSITE_REMOTE"` and compare its SHA-256 with the local
+  manifest. Off-site objects must be versioned/retention-locked; never delete them from a
+  routine cleanup job.
+- Run `dc exec ops /opt/aurex/backup/offsite.sh` to copy and verify again. If
+  `OFFSITE_REMOTE` is empty or `secrets/rclone_conf` is missing, configure them: the
+  scheduler deliberately does not fake success.
+- A stale control for more than 30 h fails the go-live gate; a page fires after 30 min above
+  the alert threshold. If the remote checksum differs, treat it as a possible integrity
+  incident and preserve both copies.
+
+## Alert delivery and go-live verification
+- Set `AUREX_ALERTMANAGER_WEBHOOK_URL` in `.env.prod` and configure a receiver in
+  Alertmanager. Both the metrics token and the webhook are required by the monitoring gate.
+- Run `python -m app.cli go-live-check` from a release checkout. Any nonzero exit blocks
+  launch. Run `python scripts/check_compliance_evidence.py` to see which signed evidence is
+  still missing. Neither command changes runtime state.
+
 ## Key rotation (JWT / data key)
 1. Generate a new secret. Put the old one in a `secrets/jwt_previous` file (one secret per line)
    mounted as `AUREX_JWT_PREVIOUS_SECRETS_FILE`, set the new `secrets/jwt_secret`, then `dc up -d`.

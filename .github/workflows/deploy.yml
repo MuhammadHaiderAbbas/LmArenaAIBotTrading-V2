@@ -1,0 +1,91 @@
+name: Deploy
+
+# Deploys the Edge API from the exact local sources, then (when host secrets are set)
+# rolls the Python API/ops containers. Called by release.yml on a version tag, and
+# available for manual re-runs from the Actions tab.
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Image tag being deployed
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aurex-deploy
+  cancel-in-progress: false
+
+jobs:
+  compliance:
+    name: Go-live evidence gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - run: python scripts/check_compliance_evidence.py
+
+  edge-api:
+    needs: compliance
+    name: Edge API + health check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || secrets.SUPABASE_PROJECT_REF }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      AUREX_EXPECTED_VERSION: ${{ vars.AUREX_EXPECTED_VERSION || 'phase-2.0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wake Supabase if paused
+        run: bash scripts/wake-supabase.sh
+      - name: Deploy six Edge Functions
+        run: bash scripts/deploy-edge-functions.sh
+      - name: Verify health
+        run: bash scripts/supabase-health.sh
+
+  python-api:
+    needs: compliance
+    name: Python API host + readiness check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AUREX_SSH_HOST: ${{ secrets.AUREX_SSH_HOST }}
+      AUREX_SSH_USER: ${{ secrets.AUREX_SSH_USER || 'aurex' }}
+      AUREX_SSH_KEY: ${{ secrets.AUREX_SSH_KEY }}
+      AUREX_DEPLOY_DIR: ${{ secrets.AUREX_DEPLOY_DIR }}
+      AUREX_PUBLIC_DOMAIN: ${{ secrets.AUREX_PUBLIC_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Roll containers over SSH
+        run: |
+          if [[ -z "${AUREX_SSH_HOST:-}" || -z "${AUREX_SSH_KEY:-}" || -z "${AUREX_DEPLOY_DIR:-}" ]]; then
+            echo "::notice::Python host secrets not configured; skipping host deploy"
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$AUREX_SSH_KEY" > ~/.ssh/aurex_deploy_key
+          chmod 600 ~/.ssh/aurex_deploy_key
+          ssh -i ~/.ssh/aurex_deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+            "${AUREX_SSH_USER}@${AUREX_SSH_HOST}" \
+            "cd '${AUREX_DEPLOY_DIR}' && docker compose -f docker-compose.prod.yml --env-file .env.prod pull backend ops && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --no-deps backend ops"
+      - name: Verify readiness
+        run: |
+          if [[ -z "${AUREX_PUBLIC_DOMAIN:-}" ]]; then
+            echo "::notice::AUREX_PUBLIC_DOMAIN not set; skipping readiness probe"
+            exit 0
+          fi
+          for attempt in $(seq 1 30); do
+            body="$(curl -fsS --max-time 10 "https://${AUREX_PUBLIC_DOMAIN}/api/v1/system/ready" 2>/dev/null || true)"
+            if [[ -n "$body" ]] && echo "$body" | jq -e '.status == "ready"' >/dev/null 2>&1; then
+              echo "Python API ready"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Python API readiness check failed after 5 minutes" >&2
+          [[ -n "${body:-}" ]] && echo "$body" >&2
+          exit 1

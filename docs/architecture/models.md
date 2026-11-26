@@ -48,15 +48,32 @@ max drawdown, trades, exposure, hit rate, per-fold results, and downsampled equi
 7. Beats buy & hold in ≥ 60% of folds.
 8. **Plausible performance:** Sharpe ≤ 4 and AUC ≤ 0.75. Anything stronger on financial
    returns almost always means leakage or a non-market data source.
-9. **Trained on real market data:** not synthetic.
+9. **Trained on real market data:** the source must be `coinbase`, `finnhub` or `oanda`.
+   `synthetic` and `ecb_reference` (a real but non-executable daily fixing) are not enough
+   to underwrite a trading model.
 
 Promotion is an audited **admin action**, at most one champion per instrument (enforced by a
-partial unique index). The previous champion is retired.
+partial unique index). The previous champion is retired. `POST /ml/versions/{id}/promote`
+re-derives all nine gates from the stored walk-forward evidence at the moment of promotion,
+checks that every candle in the training window came from the same tradable provider,
+verifies the artifact HMAC, and rejects unresolved drift. A stale `eligible = true` flag or
+a flipped gate flag cannot promote a synthetic-only version; the flag is cleared instead.
+Failed attempts are written to the audit chain as `ml.promote` with `outcome = failure`.
+No model promotes itself.
 
 ## Drift monitoring
 `POST /ml/versions/{id}/drift-check` compares 30 recent days with the training reference.
 It computes the PSI per feature (decile bins) and the recent Brier score against the
-out-of-sample Brier.
+out-of-sample Brier. The same check is **scheduled**: every `worker-once` tick (local loop
+or GitHub Actions) checks champions and still-eligible candidates that are due, at most
+once per `AUREX_ML_DRIFT_CHECK_INTERVAL_SECONDS` (default 6h), over
+`AUREX_ML_DRIFT_CHECK_WINDOW_DAYS` (default 30). Set
+`AUREX_ML_DRIFT_MONITORING_ENABLED=false` to disable the scheduled pass. Each check writes
+a `drift_check` evaluation with `created_by = null` and an audited
+`ml.drift_check_scheduled` record; failures for one model are counted and isolated from the
+rest of the scheduler pass. Stale `eligible = true` flags on synthetic/non-tradable versions
+are revoked and audited as `ml.eligibility_revoked`. The worker returns a `drift` summary
+alongside matcher/binary/anchoring results.
 
 The result is `drift` when ≥ 2 features have PSI > 0.25 or Brier is > 20% worse;
 `warning` when any feature has PSI > 0.10; otherwise `ok`. Drift on a champion sets

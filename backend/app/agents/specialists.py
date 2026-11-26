@@ -190,19 +190,33 @@ def news(ctx: AgentContext) -> Finding:
 
 def sentiment(ctx: AgentContext) -> Finding:
     docs = [d for d in ctx.docs if d.age_days <= 30]
-    if not docs:
-        return Finding.abstain("sentiment", "No research coverage of this instrument in 30 days")
+    if not docs and not ctx.positioning:
+        return Finding.abstain("sentiment", "No research coverage or positioning feed in 30 days")
     tone, _ = _weighted_tone(docs, 10)
     score = st.clip(tone * 1.2)
+    evidence = [Evidence("Documents (30d)", str(len(docs))), Evidence("Weighted tone", f"{tone:+.2f}")]
+    note = "Lexical measure only."
+    if ctx.positioning:
+        # Crowded longs (positive funding) are a contrarian bearish tilt, and vice versa.
+        funding_bps = float(ctx.positioning.get("funding_bps", 0.0))
+        oi_pct = float(ctx.positioning.get("oi_change_pct", 0.0))
+        tilt = -st.clip(funding_bps / 20) * 0.3
+        score = st.clip(score + tilt)
+        side = "longs" if funding_bps > 0 else "shorts" if funding_bps < 0 else "balanced"
+        note = (f"Perp funding {funding_bps:+.2f} bps ({side}), open interest "
+                f"{oi_pct:+.1f}% over the window; contrarian congestion tilt {tilt:+.2f} "
+                f"from {ctx.positioning.get('source', 'venue')}.")
+        evidence += [Evidence("Funding", f"{funding_bps:+.2f} bps"),
+                     Evidence("Open interest", f"{oi_pct:+.1f}%")]
     direction = 1 if score > 0.15 else -1 if score < -0.15 else 0
     pos = sum(d.sentiment > 0.15 for d in docs)
     neg = sum(d.sentiment < -0.15 for d in docs)
     return Finding(
-        "sentiment", "ok", direction, round(score, 3), round(min(1.0, len(docs) / 5) * 0.5, 3),
+        "sentiment", "ok", direction, round(score, 3),
+        round(min(1.0, len(docs) / 5) * 0.5 + (0.2 if ctx.positioning else 0.0), 3),
         f"Research tone over 30 days: {pos} positive, {neg} negative, "
-        f"{len(docs) - pos - neg} neutral (weighted {tone:+.2f}). Lexical measure only; "
-        "no positioning data is connected yet.",
-        [Evidence("Documents (30d)", str(len(docs))), Evidence("Weighted tone", f"{tone:+.2f}")],
+        f"{len(docs) - pos - neg} neutral (weighted {tone:+.2f}). {note}",
+        evidence,
     )
 
 
@@ -210,18 +224,39 @@ def fundamental(ctx: AgentContext) -> Finding:
     if ctx.instrument.asset_class not in ("STOCK", "ETF"):
         return Finding.abstain("fundamental", "Company fundamentals do not apply to this instrument")
     docs = [d for d in ctx.docs if d.doc_type in ("earnings", "filing") and d.age_days <= 400]
-    if not docs:
-        return Finding.abstain("fundamental", "No earnings reports or filings for this instrument in the corpus")
+    ratios = (ctx.fundamentals or {}).get("ratios", {})
+    if not docs and not ratios:
+        return Finding.abstain("fundamental", "No earnings reports, filings or fundamental ratios available")
     tone, _ = _weighted_tone(docs, 90)
     score = st.clip(tone * 1.2)
+    evidence = [Evidence(f"{d.doc_type} · {d.age_days:.0f}d", d.title, f"tone {d.sentiment:+.2f}")
+                for d in docs[:5]]
+    note = f"{len(docs)} earnings/filing document(s); weighted tone {tone:+.2f}."
+    if ratios:
+        # Conservative valuation/margin scoring; never a price target or a recommendation.
+        pe, margin, debt = (ratios.get("pe_ratio"), ratios.get("net_margin"),
+                            ratios.get("debt_to_equity"))
+        tilt = 0.0
+        if pe is not None:
+            tilt += 0.2 if 0 < pe <= 15 else -0.2 if pe >= 35 else 0.0
+        if margin is not None:
+            tilt += 0.1 if margin > 0.15 else -0.2 if margin < 0 else 0.0
+        if debt is not None and debt > 2:
+            tilt -= 0.1
+        score = st.clip(score + tilt)
+        source = (ctx.fundamentals or {}).get("source", "unknown")
+        note += (f" Ratios from {source}: P/E {pe:.1f}" if pe is not None else
+                 f" Ratios from {source}") + (
+            f", net margin {margin:.1%}" if margin is not None else "") + (
+            f", debt/equity {debt:.2f}" if debt is not None else "") + (
+            f"; valuation tilt {tilt:+.2f}.")
+        evidence.append(Evidence("Fundamental source", source))
+        for key in ("pe_ratio", "net_margin", "debt_to_equity"):
+            if key in ratios:
+                evidence.append(Evidence(key, f"{ratios[key]:.4f}"))
     direction = 1 if score > 0.15 else -1 if score < -0.15 else 0
-    return Finding(
-        "fundamental", "ok", direction, round(score, 3), round(min(1.0, len(docs) / 2) * 0.5, 3),
-        f"{len(docs)} earnings/filing document(s); weighted tone {tone:+.2f}. Quantitative "
-        "statement analysis (ratios, valuation) is not implemented yet.",
-        [Evidence(f"{d.doc_type} · {d.age_days:.0f}d", d.title, f"tone {d.sentiment:+.2f}")
-         for d in docs[:5]],
-    )
+    confidence = round(min(1.0, len(docs) / 2) * 0.5 + (0.2 if ratios else 0.0), 3)
+    return Finding("fundamental", "ok", direction, round(score, 3), confidence, note, evidence)
 
 
 def ml_model(ctx: AgentContext) -> Finding:

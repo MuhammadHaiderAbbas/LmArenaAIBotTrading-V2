@@ -12,6 +12,16 @@ test("static demo: launch, markets, wallet, admin, deep links", async ({ page })
   await expect(page.getByText("Public demo.")).toBeVisible();
   await page.getByRole("button", { name: "Launch demo", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Demo Trader" })).toBeVisible();
+  await expect(page.getByTestId("demo-banner")).toContainText("SIMULATED DATA");
+  await expect(page.getByTestId("paper-trading-banner")).toContainText(/paper trading only/i);
+  await page.getByRole("link", { name: "Status", exact: true }).click();
+  await expect(page.getByTestId("public-status-state")).toContainText("Operational");
+  await expect(page.getByTestId("public-announcements")).toContainText("Paper trading only");
+  await page.getByRole("link", { name: "Send feedback" }).click();
+  await page.getByLabel("Feedback message").fill("Soft launch feedback from the demo E2E run.");
+  await page.getByRole("button", { name: "Send feedback" }).click();
+  await expect(page.getByTestId("feedback-thanks")).toBeVisible();
+  await page.goto("");
   await expect(page.getByRole("link", { name: "Demo paper account" })).toBeVisible();
   await expect(page.getByText("US$100,000.00").first()).toBeVisible();
   await expect(page.getByTestId("live-status")).toContainText(/Live · polling/i);
@@ -42,6 +52,10 @@ test("static demo: launch, markets, wallet, admin, deep links", async ({ page })
   expect((await auditDownload).suggestedFilename()).toMatch(/^aurex-audit-.*\.jsonl$/);
   await page.getByRole("link", { name: "Operations" }).click();
   await expect(page.getByTestId("ops-ready")).toContainText("Live trading disabled");
+  await expect(page.getByTestId("ops-gates")).toContainText(/UK solicitor/);
+  await expect(page.getByTestId("ops-gates")).toContainText(/DPIA/);
+  await expect(page.getByTestId("ops-gates")).toContainText(/off-site backup/i);
+  await expect(page.getByRole("textbox", { name: "Evidence SHA-256" })).toBeVisible();
   await page.getByRole("button", { name: "Anchor now" }).click();
   await expect(page.getByTestId("ops-anchoring")).toContainText("covers record");
   await page.getByRole("button", { name: "Run integrity check" }).click();
@@ -76,7 +90,9 @@ test("static demo: launch, markets, wallet, admin, deep links", async ({ page })
   // Model Lab in the browser: logistic regression with walk-forward validation
   await page.getByRole("link", { name: "Model Lab" }).click();
   await page.getByLabel("Instrument").selectOption("EUR/USD");
+  await expect(page.getByLabel("Algorithm").locator("option")).toHaveCount(1);  // demo is logistic-only
   await page.getByLabel("Algorithm").selectOption("logistic");
+  await expect(page.getByText(/random forest and LightGBM need the AUREX backend/)).toBeVisible();
   await page.getByLabel("History").selectOption("60");
   await page.getByRole("button", { name: "Train & validate" }).click();
   await expect(page.getByTestId("gates")).toBeVisible({ timeout: 60_000 });
@@ -295,6 +311,7 @@ async function mfaFlow(page: import("@playwright/test").Page, password: string, 
 async function binaryFlow(page: import("@playwright/test").Page, account?: string) {
   await page.getByRole("link", { name: "Binary Options", exact: true }).click();
   if (account) await page.getByLabel("Account", { exact: true }).selectOption({ label: account });
+  await expect(page.getByTestId("binary-disclaimer")).toContainText("Paper simulation only — not available with real money");
   await expect(page.getByRole("note", { name: "Binary options warning" })).toContainText("banned for retail customers in the UK");
   await expect(page.getByTestId("binary-maths")).toContainText("55.6%");
   await expect(page.getByTestId("live-tick-chart")).toBeVisible();

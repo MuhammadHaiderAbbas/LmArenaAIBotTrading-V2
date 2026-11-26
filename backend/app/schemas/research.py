@@ -18,6 +18,7 @@ class DocumentRead(ORMModel):
     retrieved_at: datetime
     word_count: int
     page_count: int | None
+    ocr_pages: list[int] = []
     symbols: list[str]
     sentiment: float
     is_sample: bool
@@ -95,9 +96,21 @@ class ReportRead(ReportSummary):
     latency_ms: int
 
 
+class FundamentalAnalysisRead(BaseModel):
+    symbol: str
+    source: str
+    as_of: datetime
+    ratios: dict[str, float] = {}
+    valuation: dict[str, float] = {}
+    evidence: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+
 class ResearchStatus(BaseModel):
     engine: str
     model: str | None
+    llm_key_configured: bool = False
+    llm_key_source: str = "none"
     embedding_model: str
     documents: int
     chunks: int

@@ -28,11 +28,14 @@ export function OperationsPage() {
   const status = useQuery({ queryKey: ["ops"], queryFn: () => api<OpsStatus>("/admin/ops/status"), refetchInterval: 15_000 });
   const anchor = useMutation({ mutationFn: () => api("/admin/ops/anchor", { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["ops"] }) });
   const integrity = useMutation({ mutationFn: () => api<IntegrityResult>("/admin/ops/integrity-check", { method: "POST" }) });
-  const [gate, setGate] = useState<"pentest" | "broker_sandbox">("pentest");
+  const [gate, setGate] = useState("pentest");
   const [reference, setReference] = useState("");
+  const [evidenceSha, setEvidenceSha] = useState("");
+  const [reviewedAt, setReviewedAt] = useState(() => new Date().toISOString().slice(0, 10));
   const attest = useMutation({
-    mutationFn: () => api("/admin/ops/attestations", { method: "POST", json: { gate, reference } }),
-    onSuccess: () => { setReference(""); qc.invalidateQueries({ queryKey: ["ops"] }); },
+    mutationFn: () => api("/admin/ops/attestations", { method: "POST",
+      json: { gate, reference, evidence_sha256: evidenceSha, reviewed_at: reviewedAt } }),
+    onSuccess: () => { setReference(""); setEvidenceSha(""); qc.invalidateQueries({ queryKey: ["ops"] }); },
   });
   if (status.isLoading) return <Spinner className="mx-auto mt-16" />;
   const s = status.data;
@@ -116,11 +119,18 @@ export function OperationsPage() {
             <CardHeader title="Record an attestation" description="For gates that need a human sign-off. Audited." />
             <CardBody>
               <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); attest.mutate(); }}>
-                <Select aria-label="Gate" value={gate} onChange={(e) => setGate(e.target.value as typeof gate)}>
-                  <option value="pentest">External penetration test</option><option value="broker_sandbox">Broker sandbox certification</option>
+                <Select aria-label="Gate" value={gate} onChange={(e) => setGate(e.target.value)}>
+                  <option value="pentest">External penetration test</option>
+                  <option value="solicitor">UK solicitor review</option>
+                  <option value="dpia">GDPR DPIA approval</option>
+                  <option value="privacy_policy">Privacy policy approval</option>
+                  <option value="broker_sandbox">Broker sandbox certification</option>
                 </Select>
                 <Input aria-label="Reference" placeholder="Report ID or link" required minLength={3} maxLength={300} value={reference} onChange={(e) => setReference(e.target.value)} />
-                <Button type="submit" size="sm" disabled={attest.isPending || reference.length < 3}>Record attestation</Button>
+                <Input aria-label="Evidence SHA-256" placeholder="64-character sha256 of the signed report" value={evidenceSha}
+                  onChange={(e) => setEvidenceSha(e.target.value.trim())} pattern="[0-9a-f]{64}" required />
+                <Input aria-label="Review date" type="date" value={reviewedAt} onChange={(e) => setReviewedAt(e.target.value)} required />
+                <Button type="submit" size="sm" disabled={attest.isPending || reference.length < 3 || !/^[0-9a-f]{64}$/.test(evidenceSha)}>Record attestation</Button>
               </form>
             </CardBody>
           </Card>

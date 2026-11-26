@@ -1,4 +1,4 @@
-# Research engine (Phase 4)
+# Research engine (Phases 4 and 6)
 
 ```
 ingest ─► extract ─► classify + tag ─► chunk ─► embed ─► index
@@ -15,7 +15,7 @@ ask ─► hybrid retrieve (vector ⊕ full-text, RRF) ─► engine drafts clai
 | Input | Path | Notes |
 |---|---|---|
 | Pasted text / HTML | `POST /research/documents` (admin) | HTML is stripped of script, style, nav and footer |
-| File upload | `POST /research/documents/upload` (admin) | PDF (per-page text via pypdf), HTML, text; 10 MB cap; encrypted or scanned PDFs are rejected (OCR comes later) |
+| File upload | `POST /research/documents/upload` (admin) | PDF (per-page text via pypdf, then Tesseract OCR on pages with no text layer), HTML, text; 10 MB cap; encrypted PDFs rejected |
 | URL or RSS/Atom | `POST /research/documents/fetch` (admin) | https only, host allow-list (`AUREX_RESEARCH_ALLOWED_HOSTS`), no redirects, size cap, `defusedxml` |
 | Sample corpus | `POST /research/samples` (admin) | **Fictional**, labelled everywhere, idempotent |
 
@@ -23,7 +23,20 @@ Documents are deduplicated by the SHA-256 of their normalised text. Each documen
 classified (`earnings`, `filing`, `central_bank`, `economic_data`, `news`, `analysis`,
 `other`), tagged with registry instruments, and given a lexical tone score. Each record keeps
 its source, URL, publication date and retrieval timestamp, and each chunk keeps its page and
-paragraph.
+paragraph. OCR-derived pages are listed in `document.ocr_pages` so their provenance is visible.
+OCR is bounded by `AUREX_OCR_MAX_PAGES` and needs the `tesseract-ocr` binary in the image.
+
+## Positioning and fundamentals
+- `GET /markets/instruments/{symbol}/positioning` returns crypto perp funding basis,
+  mark/index prices and open interest from Binance USDⓈ-M futures, labelled
+  `source=binance_futures`. The feed is opt-in (`AUREX_POSITIONING_ENABLED`), TTL-cached and
+  fail-open (unavailable → `available=false`, never invented data). The sentiment agent uses
+  a small contrarian tilt from crowded funding and records it as evidence.
+- `GET /research/fundamentals?symbol=AAPL` returns ratios and valuation with a `source`
+  of `finnhub` (licensed `/stock/metric`) or `document_extraction` (figures parsed from
+  ingested earnings/filings with the source quote retained). The two paths are never mixed
+  silently, and missing figures are omitted. The fundamental agent uses the ratios with a
+  conservative, labelled valuation tilt.
 
 ## Retrieval
 Two candidate lists are fused with reciprocal-rank fusion (k = 60):
@@ -57,8 +70,11 @@ execution**.
 | `extractive` (default) | Offline and deterministic. Ranks sentences by query overlap; facts are verbatim sentences. Contradictions come from lexical tone. |
 | `claude` | `claude-opus-5-5` (configurable via `AUREX_LLM_MODEL`), adaptive thinking, effort `high`, schema-constrained JSON output, and server-side refusal fallbacks. Source text is passed as untrusted data. Any refusal, API error, missing credentials or malformed output falls back to the extractive engine, with a warning in the report. |
 
-Credentials come from the Anthropic SDK's standard resolution (`ANTHROPIC_API_KEY`, or an
-`ant auth login` profile). Questions are rate-limited per user
+Credentials prefer the server-side `AUREX_CLAUDE_API_KEY` / `AUREX_CLAUDE_API_KEY_FILE`,
+falling back to the SDK's `ANTHROPIC_API_KEY`. The key is passed to the Anthropic client in
+code and never returned by the API: `/research/status` reports only `llm_key_configured` and
+`llm_key_source` (`server_setting`, `environment`, `none`). Staging/production refuse to start
+with `AUREX_RESEARCH_ENGINE=claude` and no credential. Questions are rate-limited per user
 (`AUREX_RESEARCH_ASKS_PER_HOUR`, default 30).
 
 ## Demo build

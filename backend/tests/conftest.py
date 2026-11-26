@@ -8,6 +8,19 @@ os.environ["AUREX_ENVIRONMENT"] = "test"
 os.environ["AUREX_ALLOW_REGISTRATION"] = "true"
 os.environ["AUREX_ORDER_MATCHER_INTERVAL_SECONDS"] = "0"
 
+# Exercise the real shared global limiter whenever a local Redis is available. CI sets
+# AUREX_REDIS_URL explicitly; localhost is only a fallback so a developer's suite matches CI.
+_TEST_REDIS_URL = "redis://localhost:6379/15"
+if not os.environ.get("AUREX_REDIS_URL"):
+    import redis as sync_redis  # noqa: E402
+
+    try:
+        sync_redis.Redis.from_url(_TEST_REDIS_URL, socket_connect_timeout=0.3).ping()
+    except Exception:  # noqa: BLE001, S110 - no Redis locally: the in-process fallback is still tested
+        pass
+    else:
+        os.environ["AUREX_REDIS_URL"] = _TEST_REDIS_URL
+
 from pathlib import Path  # noqa: E402
 
 import httpx  # noqa: E402
@@ -18,6 +31,7 @@ from sqlalchemy import text  # noqa: E402
 
 from app.api.v1 import ai as ai_api  # noqa: E402
 from app.api.v1 import backtests as backtests_api  # noqa: E402
+from app.api.v1 import feedback as feedback_api  # noqa: E402
 from app.api.v1 import ml as ml_api  # noqa: E402
 from app.api.v1 import research as research_api  # noqa: E402
 from app.api.v1 import risk as risk_api  # noqa: E402
@@ -26,6 +40,7 @@ from app.core.config import get_settings  # noqa: E402
 from app.core.errors import Conflict  # noqa: E402
 from app.core.middleware import reset_rate_limits  # noqa: E402
 from app.core.rate_limit import login_limiter  # noqa: E402
+from app.core.redis import close_redis, get_redis  # noqa: E402
 from app.database.session import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.market import service as market_service  # noqa: E402
@@ -52,6 +67,8 @@ def migrated_database():
 
 @pytest.fixture(autouse=True)
 async def clean_state():
+    # A previous test may have monkeypatched settings to a dead Redis URL.
+    get_settings.cache_clear()
     async with SessionLocal() as db:
         await db.execute(text(
             "TRUNCATE ledger_entries, ledger_transactions, ledger_accounts, trading_accounts, "
@@ -59,9 +76,20 @@ async def clean_state():
             "watchlists, research_reports, research_chunks, research_documents, trade_proposals, ai_findings, "
             "ai_runs, model_evaluations, model_versions, ml_models, backtests, executions, order_events, orders, "
             "positions, portfolio_snapshots, risk_decisions, risk_events, risk_profiles, system_controls, audit_anchors, binary_contracts, "
-            "users RESTART IDENTITY CASCADE"
+            "feedback_submissions, users RESTART IDENTITY CASCADE"
         ))
         await db.commit()
+    r = get_redis()
+    if r is not None:                     # shared counters must not leak between tests
+        # Includes aurex:rl:global:<ip>:<minute> from RateLimitMiddleware as well as the
+        # sliding-window keys. Fail open if Redis went away mid-suite; the test below still
+        # resets the in-process state.
+        try:
+            keys = [key async for key in r.scan_iter(match="aurex:rl:*", count=500)]
+            if keys:
+                await r.delete(*keys)
+        except Exception:  # noqa: BLE001, S110 - cleanup must never mask the test failure
+            pass
     login_limiter.reset()
     reset_rate_limits()
     auth_service.lockout_limiter.reset()
@@ -76,10 +104,13 @@ async def clean_state():
     backtests_api.bt_limiter.reset()
     trading_api.order_limiter.reset()
     risk_api.cycle_limiter.reset()
+    feedback_api.limiter.reset()
     ml_service.clear_cache()
     research_llm.set_client(None)
     research_fetch.set_http_client(None)
     yield
+    get_settings.cache_clear()
+    await close_redis()
 
 
 @pytest.fixture

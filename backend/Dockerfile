@@ -2,8 +2,9 @@ FROM python:3.13-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 
-# libgomp1: OpenMP runtime required by the LightGBM wheel
-RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/* \
+# tesseract-ocr: OCR fallback for scanned PDFs; libgomp1: LightGBM OpenMP runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 aurex
 COPY requirements.txt .
 RUN pip install -r requirements.txt
@@ -37,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
     && . /etc/os-release \
     && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
-    && apt-get update && apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}" \
+    && apt-get update && apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}" rclone \
     && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 ENV PATH="/usr/lib/postgresql/${PG_MAJOR}/bin:${PATH}"
 COPY --chown=aurex:aurex ops/backup /opt/aurex/backup

@@ -54,6 +54,9 @@ class RawQuote:
     prev_close: Decimal | None
     as_of: datetime
     source: str
+    # "actual" (real bid/ask), "estimated_spread" (real last, modelled spread),
+    # "reference" (non-tradable fixing) or "simulated" (public demo only).
+    pricing: str = "actual"
 
 
 class ProviderError(Exception):

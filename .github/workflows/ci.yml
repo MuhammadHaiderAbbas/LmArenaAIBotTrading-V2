@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  legal:
+    name: Legal re-review gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - name: Marketing / data change requires fresh legal sign-off
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          case "$base" in ""|000*) base="HEAD~1" ;; esac
+          python scripts/check_legal_gate.py --base "$base" --head HEAD
+
   backend:
     runs-on: ubuntu-latest
     services:
@@ -19,6 +33,9 @@ jobs:
         image: redis:7.4-alpine
         ports: ["6379:6379"]
     defaults: { run: { working-directory: backend } }
+    env:
+      AUREX_DATABASE_URL: postgresql+asyncpg://aurex:aurex@localhost:5432/aurex_test
+      AUREX_REDIS_URL: redis://localhost:6379/15   # exercise the shared limiter in the full suite
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,8 +43,18 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: pytest -q
-        env:
-          AUREX_DATABASE_URL: postgresql+asyncpg://aurex:aurex@localhost:5432/aurex_test
+
+  supabase:
+    name: Supabase Edge Functions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with: { deno-version: v2.x }
+      - name: Type-check deployed Edge Function sources
+        run: deno check edge-functions/*/index.ts
+      - name: CORS / MFA / rate-limit / paper-only contract
+        run: bash scripts/check-edge-functions.sh
 
   frontend:
     runs-on: ubuntu-latest
@@ -37,10 +64,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
       - run: npm ci
+      - name: Demo/backend rule parity
+        run: npm run check:parity
       - run: npm run build
 
   e2e:
-    needs: [backend, frontend]
+    needs: [legal, backend, frontend, supabase]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -49,8 +78,12 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U aurex" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
     env:
       AUREX_DATABASE_URL: postgresql+asyncpg://aurex:aurex@localhost:5432/aurex
+      AUREX_REDIS_URL: redis://localhost:6379/15   # same global limiter as the deployed stack
       AUREX_ADMIN_PASSWORD: Ci-Operator-Key-42!
       AUREX_E2E_ADMIN_EMAIL: admin@example.com
       AUREX_E2E_ADMIN_PASSWORD: Ci-Operator-Key-42!
@@ -67,10 +100,15 @@ jobs:
           alembic upgrade head
           python -m app.cli create-admin --email "$AUREX_E2E_ADMIN_EMAIL" --name "CI Admin"
           nohup uvicorn app.main:app --port 8000 > api.log 2>&1 &
-      - name: Playwright
+      - name: Build the production bundle the E2E run will exercise
         working-directory: frontend
         run: |
           npm ci
+          npm run build
+
+      - name: Playwright against vite preview (built assets, not the dev server)
+        working-directory: frontend
+        run: |
           npx playwright install --with-deps chromium
           npx playwright test --trace off
 

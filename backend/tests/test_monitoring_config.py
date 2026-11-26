@@ -36,7 +36,15 @@ def test_alert_rules_are_well_formed_and_use_real_metrics():
             missing = referenced(rule["expr"]) - names
             assert not missing, f"{rule['alert']} uses unknown metrics {missing}"
             seen |= referenced(rule["expr"])
-    assert {"aurex_worker_heartbeat_age_seconds", "aurex_last_backup_age_seconds", "aurex_last_anchor_age_seconds"} <= seen
+    assert {"aurex_worker_heartbeat_age_seconds", "aurex_last_backup_age_seconds", "aurex_last_anchor_age_seconds",
+            "aurex_last_offsite_backup_age_seconds", "aurex_last_offsite_anchor_age_seconds"} <= seen
+
+
+def test_alertmanager_routes_pages_to_a_webhook():
+    cfg = yaml.safe_load((MON / "alertmanager.yml").read_text())
+    page = next(r for r in cfg["receivers"] if r["name"] == "aurex-page")
+    assert page["webhook_configs"][0]["url"] == "__WEBHOOK_URL__"
+    assert any(r["matchers"] == ['severity="page"'] for r in cfg["route"]["routes"])
 
 
 def test_dashboard_uses_real_metrics():

@@ -21,11 +21,14 @@ log = logging.getLogger("aurex.matcher")
 async def lifespan(app: FastAPI):
     from app.core.redis import close_redis
     from app.ops import worker
+    from app.realtime.bus import start_bus, stop_bus
 
     s = get_settings()
     interval = s.order_matcher_interval_seconds
     task = asyncio.create_task(worker.run(interval)) if interval > 0 and s.background_worker else None
+    await start_bus()
     yield
+    await stop_bus()
     if task:
         task.cancel()
         try:

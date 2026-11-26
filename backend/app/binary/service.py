@@ -69,7 +69,8 @@ def config() -> dict[str, Any]:
     s = get_settings()
     p = s.binary_payout_rate
     return {
-        "payout_rate": p, "expiries": sorted(s.binary_expiries), "break_even_win_rate": 1 / (1 + p),
+        "paper_only": True, "payout_rate": p, "expiries": sorted(s.binary_expiries),
+        "break_even_win_rate": 1 / (1 + p),
         "coin_flip_expected_return": 0.5 * p - 0.5, "minimum_stake": Decimal(s.min_order_value),
         "void_after_seconds": s.binary_void_after_seconds,
     }

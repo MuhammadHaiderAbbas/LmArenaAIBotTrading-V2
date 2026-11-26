@@ -43,3 +43,30 @@ async def ready(db: AsyncSession = Depends(get_db)):
 
     ok, checks = await readiness(db)
     return JSONResponse({"status": "ready" if ok else "not_ready", "checks": checks}, status_code=200 if ok else 503)
+
+
+@router.get("/status")
+async def public_status(db: AsyncSession = Depends(get_db)):
+    """Unauthenticated soft-launch status. Deliberately omits admin/ops detail and never
+    reports live trading as available."""
+    from app.ops.status import readiness
+
+    ok, checks = await readiness(db)
+    s = get_settings()
+    return {
+        "name": s.app_name,
+        "version": __version__,
+        "environment": s.environment,
+        "phase": "soft_launch",
+        "status": "operational" if ok else "degraded",
+        "trading_mode": "PAPER",
+        "live_trading_enabled": False,
+        "checks": {key: checks.get(key) for key in ("database", "schema", "redis", "worker")},
+        "announcements": [
+            "Paper trading only — all balances are virtual and no real orders are placed.",
+            "Market data may be delayed or simulated; never use AUREX for investment decisions.",
+            "Send feedback from the Feedback page; it is reviewed during the soft launch.",
+        ],
+        "feedback_enabled": True,
+        "legal_review_required_for": ["marketing", "data-provider", "privacy-disclosure"],
+    }

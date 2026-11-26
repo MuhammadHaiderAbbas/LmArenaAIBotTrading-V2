@@ -6,7 +6,16 @@ import pytest
 
 from app.ml import drift, validation
 from app.ml.features import FEATURES, WARMUP, build_dataset, feature_matrix
-from app.ml.validation import WalkForward, brier, calibration, gates, max_drawdown, strategy, walk_forward
+from app.ml.validation import (
+    WalkForward,
+    brier,
+    calibration,
+    gates,
+    max_drawdown,
+    recheck_gates,
+    strategy,
+    walk_forward,
+)
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -91,6 +100,13 @@ def test_gates_logic():
     assert all(g["passed"] for g in gates(_wf(), "coinbase"))
     failed = {g["name"] for g in gates(_wf(), "synthetic") if not g["passed"]}
     assert failed == {"Trained on real market data"}
+    assert {g["name"] for g in gates(_wf(), "ecb_reference") if not g["passed"]} == {
+        "Trained on real market data"}              # real but non-executable feed
+    wf = _wf()
+    metrics = {"oos": wf.oos, "baselines": wf.baselines, "folds": wf.folds,
+               "calibration": wf.calibration}
+    assert all(g["passed"] for g in recheck_gates(metrics, "coinbase"))
+    assert not recheck_gates(metrics, "synthetic")[-1]["passed"]
     failed = {g["name"] for g in gates(_wf(strategy_sharpe=9, auc=0.95), "coinbase") if not g["passed"]}
     assert failed == {"Plausible performance"}
     failed = {g["name"] for g in gates(_wf(strategy_net_return=0.01, brier=0.26, ece=0.2, strategy_trades=3),

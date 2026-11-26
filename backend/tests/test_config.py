@@ -36,6 +36,27 @@ def test_production_requires_strong_secret_and_secure_cookies(monkeypatch):
     assert s.live_trading_enabled is False and s.docs_enabled is False and s.hsts_enabled is True
 
 
+def test_live_trading_cannot_be_enabled_by_configuration(monkeypatch):
+    monkeypatch.setenv("AUREX_LIVE_TRADING_ENABLED", "true")
+    with pytest.raises(ValidationError, match="Live trading is disabled"):
+        Settings()
+    monkeypatch.setenv("AUREX_LIVE_TRADING_ENABLED", "false")
+    assert Settings().live_trading_enabled is False
+
+
+def test_production_rejects_disabling_admin_mfa(monkeypatch):
+    env = {
+        "AUREX_ENVIRONMENT": "production", "AUREX_JWT_SECRET": "x" * 48,
+        "AUREX_COOKIE_SECURE": "true", "AUREX_CORS_ORIGINS": "https://aurex.example",
+        "AUREX_DATABASE_URL": "postgresql+asyncpg://aurex:s3cr3t-long@db:5432/aurex",
+        "AUREX_REQUIRE_ADMIN_MFA": "false",
+    }
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(ValidationError, match="REQUIRE_ADMIN_MFA"):
+        Settings()
+
+
 def test_secrets_can_come_from_files(monkeypatch, tmp_path):
     f = tmp_path / "jwt"
     f.write_text("z" * 40 + "\n")

@@ -37,9 +37,10 @@ def quote(last: float, *, open_=True, stale=False, tradable=True, spread=0.0002)
 
 
 def ctx(h1: list[Bar], d1: list[Bar], *, inst=BTC, q: QuoteSnap | None = None, docs=(), macro=(),
-        account=True, fx=1.0) -> AgentContext:
+        account=True, fx=1.0, positioning=None, fundamentals=None) -> AgentContext:
     acct = AccountSnap("acct", "USD", Decimal("100000"), Decimal("100000")) if account else None
-    return AgentContext(inst, NOW, h1, d1, q or quote(h1[-1].c), list(docs), list(macro), acct, fx)
+    return AgentContext(inst, NOW, h1, d1, q or quote(h1[-1].c), list(docs), list(macro), acct, fx,
+                        positioning=positioning, fundamentals=fundamentals)
 
 
 UP_H = series(300, 100, 0.0015, 0.002, timedelta(hours=1))
@@ -155,3 +156,13 @@ def test_failing_or_disabled_agent_is_isolated(monkeypatch):
     assert f["technical"].status == "error" and "RuntimeError" in f["technical"].summary
     assert f["news"].status == "abstain" and "disabled" in f["news"].summary
     assert f["quant"].status == "ok" and d.decision == "NO_TRADE"
+
+
+def test_positioning_feed_tilts_sentiment_contrarian():
+    pos = {"funding_bps": 20.0, "oi_change_pct": 12.0, "source": "binance_futures"}
+    c = ctx(UP_H, UP_D, docs=(), positioning=pos)
+    f, _ = run(c, {"sentiment"})
+    assert f["sentiment"].status == "ok"
+    assert "Perp funding +20.00 bps" in f["sentiment"].summary
+    assert any(e.label == "Funding" for e in f["sentiment"].evidence)
+    assert f["sentiment"].score < 0          # crowded longs are a bearish contrarian tilt

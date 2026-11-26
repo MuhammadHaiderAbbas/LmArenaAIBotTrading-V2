@@ -145,5 +145,5 @@ class SyntheticProvider:
         d = inst.price_decimals
         return RawQuote(
             last=_q(last, d), bid=_q(last * (1 - half), d), ask=_q(last * (1 + half), d),
-            prev_close=_q(prev, d), as_of=as_of, source=self.name,
+            prev_close=_q(prev, d), as_of=as_of, source=self.name, pricing="simulated",
         )

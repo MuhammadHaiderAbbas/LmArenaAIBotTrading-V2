@@ -48,5 +48,5 @@ def test_quote_shape():
     assert q.bid < q.last < q.ask and q.as_of == NOW and q.source == "synthetic"
     sat = datetime(2026, 11, 28, 12, tzinfo=UTC)
     q2 = SyntheticProvider(now=lambda: sat).quote(AAPL)
-    assert q2.as_of == datetime(2026, 11, 27, 21, tzinfo=UTC)  # Friday close
+    assert q2.as_of == datetime(2026, 11, 27, 18, tzinfo=UTC)  # Friday early close (13:00 ET)
     assert q2.prev_close is not None

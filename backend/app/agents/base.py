@@ -71,6 +71,10 @@ class AgentContext:
     open_positions: int = 0
     # champion-model output computed while building the snapshot (None = no champion)
     ml: dict[str, Any] | None = None
+    # crypto perp funding/open interest (None = feed unavailable or not applicable)
+    positioning: dict[str, Any] | None = None
+    # equity ratios/valuation with provenance (None = unavailable/not applicable)
+    fundamentals: dict[str, Any] | None = None
 
 
 @dataclass

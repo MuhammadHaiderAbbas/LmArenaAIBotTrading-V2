@@ -167,7 +167,7 @@ export function fundamental(c: Ctx): Finding {
   const t = tone(docs, 90), score = clip(t * 1.2);
   return {
     agent: "fundamental", status: "ok", direction: dir(score, 0.15), score: +score.toFixed(3), confidence: +(Math.min(1, docs.length / 2) * 0.5).toFixed(3),
-    summary: `${docs.length} earnings/filing document(s); weighted tone ${t.toFixed(2)}. Quantitative statement analysis (ratios, valuation) is not implemented yet.`,
+    summary: `${docs.length} earnings/filing document(s); 90-day lexical tone ${t.toFixed(2)} from the demo corpus. Advisory signal only — no valuation model.`,
     evidence: docs.slice(0, 5).map((d) => ({ label: `${d.doc_type} · ${d.age_days.toFixed(0)}d`, value: d.title, detail: `tone ${d.sentiment.toFixed(2)}` })), duration_ms: 0, data: {},
   };
 }

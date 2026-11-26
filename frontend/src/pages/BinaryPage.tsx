@@ -41,7 +41,7 @@ function countdown(ms: number) {
 
 function Disclaimer({ notice }: { notice?: string }) {
   return (
-    <div role="note" aria-label="Binary options warning" className="flex gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm">
+    <div role="note" aria-label="Binary options warning" data-testid="binary-disclaimer" className="flex gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm">
       <AlertTriangle className="mt-0.5 size-5 shrink-0 text-warning" />
       <div className="space-y-1">
         <div className="font-semibold">Paper simulation only — not available with real money</div>

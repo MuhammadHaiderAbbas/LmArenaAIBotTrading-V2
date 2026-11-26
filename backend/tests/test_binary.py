@@ -45,7 +45,7 @@ def test_break_even_maths():
 async def test_config_and_disclosure(client):
     h, _ = await small_account(client)
     cfg = (await client.get(f"{API}/binary/config", headers=h)).json()
-    assert cfg["payout_rate"] == 0.8 and 60 in cfg["expiries"]
+    assert cfg["paper_only"] is True and cfg["payout_rate"] == 0.8 and 60 in cfg["expiries"]
     assert abs(cfg["break_even_win_rate"] - 1 / 1.8) < 1e-9
     assert abs(cfg["coin_flip_expected_return"] + 0.1) < 1e-9
     assert "banned for retail customers in the UK" in cfg["notice"]
@@ -88,6 +88,7 @@ async def test_win_loss_tie_and_ledger(client):
     assert D(s["equity"]) == D("99.6") and D(s["binary_at_risk"]) == 0
 
     st = (await client.get(f"{API}/binary/stats?account_id={aid}", headers=h)).json()
+    assert st["paper_only"] is True
     assert (st["won"], st["lost"], st["ties"], st["open"]) == (1, 1, 1, 0)
     assert st["win_rate"] == 0.5 and abs(st["expected_return_at_win_rate"] + 0.1) < 1e-9
     assert st["edge_vs_break_even"] < 0 and D(st["net_pnl"]) == D("-0.4")

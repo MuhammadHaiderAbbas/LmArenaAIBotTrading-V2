@@ -7,11 +7,14 @@ Protocol (JSON text frames, same auth handshake as the quote stream):
   server → {"type": "changed", "account_id": "...", "topics": ["orders", "executions", ...]}
   server → {"type": "valuation", "account_id": "...", "as_of": "...", "equity": "...", ...}
 
-Changes are detected from database fingerprints (row counts and latest update times), so
-the stream needs no pub/sub and sees fills made by the background worker on any replica.
+Changes are detected from database fingerprints (row counts and latest update times).
+One subscriber per user polls and publishes changes and valuations to a shared Redis
+Stream (when configured), so fills made by a worker on any replica reach every
+client on every API node. Without Redis the same bus works in process.
 """
 
 import asyncio
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -33,6 +36,7 @@ from app.models import (
     RiskProfile,
     TradingAccount,
 )
+from app.realtime.bus import get_bus
 
 router = APIRouter(tags=["stream"])
 MAX_ACCOUNTS = 10
@@ -110,34 +114,62 @@ async def account_stream(ws: WebSocket):
         while True:
             await ws.receive_text()            # clients send nothing after auth; any frame is ignored
 
+    bus = get_bus()
+    owner = f"account-{uuid.uuid4().hex}"
+    channel = f"account:{user_id}"
+    lease_ttl = max(1.0, interval * 5)
+
     reader = asyncio.create_task(watch_disconnect())
     last: dict[uuid.UUID, dict[str, Any]] = {}
+    seen_fingerprints: set[str] = set()
     tick = 0
+
+    async def publish(event: dict) -> None:
+        await bus.publish(channel, jsonable_encoder(event))
+
     try:
-        while not reader.done():
-            if tick:                                    # pick up accounts created after connecting
-                fresh = await owned()
-                for aid in set(fresh) - set(accounts):
-                    await ws.send_json({"type": "changed", "account_id": str(aid), "topics": ["accounts"]})
-                accounts = fresh
-            async with SessionLocal() as db:
-                fps = await fingerprints(db, accounts)
-                for aid, fp in fps.items():
-                    topics = changed_topics(last.get(aid), fp)
-                    if topics:
-                        await ws.send_json({"type": "changed", "account_id": str(aid), "topics": topics})
-                last = fps
-                if tick % max(1, round(s.account_valuation_interval_seconds / interval)) == 0:
-                    ts = TradingService(db)
-                    for aid in accounts:
-                        acct = await db.get(TradingAccount, aid)
-                        if acct is None:
-                            continue
-                        summary = await ts.summary(acct, take_snapshot=False)
-                        await ws.send_json(jsonable_encoder({"type": "valuation", "account_id": aid, **valuation(summary)}))
-                await db.rollback()             # read-only: never keep a transaction open between ticks
-            tick += 1
-            await asyncio.wait({reader}, timeout=interval)
+        async with bus.subscribe(channel) as sub:
+            while not reader.done():
+                # One subscriber per user polls, so N sockets do not emit the same change N
+                # times. The lease is refreshed on every tick by its owner.
+                if await bus.acquire_lease(f"aurex:lease:account:{user_id}", lease_ttl, owner):
+                    fresh = await owned()
+                    if tick:                            # pick up accounts created after connecting
+                        for aid in set(fresh) - set(accounts):
+                            await publish({"type": "changed", "account_id": str(aid),
+                                           "topics": ["accounts"]})
+                    accounts = fresh
+                    async with SessionLocal() as db:
+                        fps = await fingerprints(db, accounts)
+                        for aid, fp in fps.items():
+                            topics = changed_topics(last.get(aid), fp)
+                            encoded = jsonable_encoder(fp)
+                            key = json.dumps(encoded, sort_keys=True, default=str)
+                            if topics and key not in seen_fingerprints:
+                                seen_fingerprints.add(key)
+                                await publish({"type": "changed", "account_id": str(aid),
+                                               "topics": topics, "_fp": encoded})
+                        last = fps
+                        if tick % max(1, round(s.account_valuation_interval_seconds / interval)) == 0:
+                            ts = TradingService(db)
+                            for aid in accounts:
+                                acct = await db.get(TradingAccount, aid)
+                                if acct is None:
+                                    continue
+                                summary = await ts.summary(acct, take_snapshot=False)
+                                await publish({"type": "valuation", "account_id": str(aid),
+                                               **valuation(summary)})
+                        await db.rollback()         # read-only: never keep a transaction open between ticks
+                tick += 1
+                await asyncio.wait({reader}, timeout=interval)
+                while not sub.queue.empty():
+                    event = sub.queue.get_nowait()["data"]
+                    fp = event.pop("_fp", None)
+                    if fp is not None:
+                        seen_fingerprints.add(json.dumps(fp, sort_keys=True, default=str))
+                    # The channel itself is scoped to the authenticated user; only
+                    # that user's poller publishes to it.
+                    await ws.send_json(event)
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:

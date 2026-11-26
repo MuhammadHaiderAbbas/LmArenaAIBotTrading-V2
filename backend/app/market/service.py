@@ -12,7 +12,9 @@ from app.core.errors import AppError, BusinessRuleViolation, NotFound
 from app.market import calendar
 from app.market.providers.base import MarketDataProvider
 from app.market.providers.coinbase import CoinbaseProvider
+from app.market.providers.finnhub import FinnhubProvider
 from app.market.providers.frankfurter import FrankfurterProvider
+from app.market.providers.oanda import OandaProvider
 from app.market.providers.synthetic import SyntheticProvider
 from app.market.types import TIMEFRAMES, AssetClass, InstrumentRef, ProviderError, RawQuote
 from app.models import Instrument, MarketCandle
@@ -49,16 +51,46 @@ def set_provider(name: str, provider: MarketDataProvider | None) -> None:
         _providers[name] = provider
 
 
+class UnavailableProvider:
+    """Fail closed: no licensed feed means no live prices, never a fake fallback."""
+
+    name = "unavailable"
+
+    def __init__(self, reason: str):
+        self.reason = reason
+
+    async def get_candles(self, inst, timeframe, start, end):
+        raise ProviderError(self.reason)
+
+    async def get_quote(self, inst):
+        raise ProviderError(self.reason)
+
+
 def provider_for(inst: Instrument) -> MarketDataProvider:
     s = get_settings()
+    # In synthetic (public demo) mode nothing is presented as live. In live mode an
+    # instrument must name a real provider; "synthetic" is never silently upgraded.
     name = inst.data_provider if s.market_data_mode == "live" else "synthetic"
     if name not in _providers:
         if name == "coinbase":
             _providers[name] = CoinbaseProvider(s.coinbase_base_url)
         elif name == "frankfurter":
             _providers[name] = FrankfurterProvider(s.frankfurter_base_url)
-        else:
+        elif name == "finnhub":
+            _providers[name] = (FinnhubProvider(s.finnhub_api_key, s.finnhub_base_url,
+                                                s.finnhub_spread_bps)
+                                if s.finnhub_api_key else
+                                UnavailableProvider("finnhub api key is not configured"))
+        elif name == "oanda":
+            # With no OANDA credentials FX degrades to ECB fixings, which are labelled
+            # ecb_reference and never tradable. No price is invented.
+            _providers[name] = (OandaProvider(s.oanda_api_key, s.oanda_account_id, s.oanda_base_url)
+                                if s.oanda_api_key and s.oanda_account_id else
+                                FrankfurterProvider(s.frankfurter_base_url))
+        elif name == "synthetic" and s.market_data_mode == "synthetic":
             _providers[name] = SyntheticProvider()
+        else:
+            _providers[name] = UnavailableProvider(f"no licensed provider configured for {name}")
     return _providers[name]
 
 
@@ -85,6 +117,7 @@ class Quote:
     stale: bool
     tradable: bool
     age_seconds: int
+    pricing: str = "actual"
 
 
 def build_quote(inst: Instrument, raw: RawQuote, now: datetime) -> Quote:
@@ -95,13 +128,17 @@ def build_quote(inst: Instrument, raw: RawQuote, now: datetime) -> Quote:
     if raw.prev_close:
         change = raw.last - raw.prev_close
         change_pct = (change / raw.prev_close * 100).quantize(Decimal("0.01"))
+    # Reference fixings and demo simulations are never executable. In live mode a
+    # simulated quote (e.g. a misconfigured instrument) must not be tradable either.
+    live = get_settings().market_data_mode == "live"
+    executable = raw.pricing != "reference" and not (
+        live and (raw.pricing == "simulated" or raw.source == "synthetic"))
     return Quote(
         symbol=inst.symbol, last=raw.last, bid=raw.bid, ask=raw.ask, prev_close=raw.prev_close,
         change=change, change_pct=change_pct, as_of=raw.as_of, source=raw.source,
         market_open=market_open, stale=stale,
-        # Reference-rate sources are never tradable, whatever their age.
-        tradable=market_open and not stale and raw.source not in ("ecb_reference",),
-        age_seconds=age,
+        tradable=market_open and not stale and raw.source not in ("ecb_reference",) and executable,
+        age_seconds=age, pricing=raw.pricing,
     )
 
 

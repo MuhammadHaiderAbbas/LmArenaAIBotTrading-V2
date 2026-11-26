@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class BinaryConfig(BaseModel):
+    paper_only: bool = True
     payout_rate: float
     expiries: list[int]
     break_even_win_rate: float
@@ -66,6 +67,7 @@ class BinaryGroupStats(BaseModel):
 class BinaryStats(BinaryGroupStats):
     account_id: uuid.UUID
     currency: str
+    paper_only: bool = True
     payout_rate: float
     expiries: list[int]
     break_even_win_rate: float

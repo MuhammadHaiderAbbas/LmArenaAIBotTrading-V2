@@ -1,6 +1,6 @@
 """Operations API for administrators: status and go-live gates, anchoring, integrity, attestations."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends
@@ -20,8 +20,10 @@ router = APIRouter(prefix="/admin/ops", tags=["operations"], dependencies=[Depen
 
 
 class Attestation(BaseModel):
-    gate: Literal["pentest", "broker_sandbox"]
+    gate: Literal["pentest", "solicitor", "dpia", "privacy_policy", "broker_sandbox"]
     reference: str = Field(min_length=3, max_length=300)   # report id / ticket / document link
+    evidence_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    reviewed_at: date                                      # date the reviewer signed off
 
 
 @router.get("/status")
@@ -53,7 +55,9 @@ async def integrity(ctx: AuditContext = Depends(get_audit_context), db: AsyncSes
 async def attest(data: Attestation, user: User = Depends(current_user), ctx: AuditContext = Depends(get_audit_context),
                  db: AsyncSession = Depends(get_db)):
     """Record a manual go-live attestation (who, when, which report). Audited; cannot be edited, only superseded."""
-    value = {"at": datetime.now(UTC).isoformat(), "by": user.email, "reference": data.reference, "label": ATTESTABLE[data.gate]}
+    value = {"at": datetime.now(UTC).isoformat(), "by": user.email, "reference": data.reference,
+             "evidence_sha256": data.evidence_sha256, "reviewed_at": data.reviewed_at.isoformat(),
+             "label": ATTESTABLE[data.gate]}
     await controls.put(db, controls.ATTEST_PREFIX + data.gate, value, actor=user.id)
     await AuditService(db).record(ctx, "ops.attestation", resource_type="gate", resource_id=data.gate, details=value)
     await db.commit()

@@ -16,7 +16,7 @@ submit ─► shape validation ──(422, nothing stored)
 | Concern | Rule |
 |---|---|
 | Order types | MARKET, LIMIT, STOP (stop becomes a market order once triggered) |
-| Time in force | GTC (expires after 30 days) or DAY (expires at 00:00 UTC) |
+| Time in force | GTC (expires after 30 days) or DAY (expires at the current trading session's close; 24/7 crypto uses the next 00:00 UTC) |
 | Idempotency | optional `client_order_id`, unique per account; a replay returns the original order (`200`, `Idempotent-Replay: true`) |
 | Shape | quantity is a multiple of the lot size; prices respect the instrument's tick decimals; MARKET takes no prices |
 | Spot only | sells cannot exceed the open position minus quantity already in open sell orders: no shorting |

@@ -56,6 +56,8 @@ async def test_limits_are_shared_between_replicas(shared_redis):
 @needs_redis
 async def test_global_limit_uses_redis(shared_redis, monkeypatch, client):
     settings_env(monkeypatch, redis_url=REDIS_URL, api_rate_limit_per_minute=3)
+    # The autouse harness must clear the shared global counter between tests.
+    assert not sync_redis.Redis.from_url(REDIS_URL).keys("aurex:rl:global:*")
     for _ in range(3):
         assert (await client.get(f"{API}/system/info")).status_code == 200
     assert (await client.get(f"{API}/system/info")).status_code == 429
@@ -86,17 +88,90 @@ async def test_only_one_worker_is_leader():
         await b.release()
 
 
+async def test_scheduler_tick_skips_when_lease_is_held():
+    holder = worker.Lease()
+    try:
+        assert await holder.acquire()
+        assert await worker.run_once() is None
+    finally:
+        await holder.release()
+    out = await worker.run_once()
+    assert set(out) == {"matcher", "binary", "drift", "anchored"}
+    async with SessionLocal() as db:
+        hb = await controls.get(db, controls.HEARTBEAT)
+    assert hb and hb["instance"] == worker.INSTANCE
+
+
+async def test_external_scheduler_heartbeat_satisfies_readiness(monkeypatch, client):
+    settings_env(monkeypatch, background_worker=False, external_scheduler=True)
+    await worker.heartbeat()
+    r = await client.get(f"{API}/system/ready")
+    assert r.status_code == 200
+    assert r.json()["checks"]["worker"] == "ok"
+    assert r.json()["checks"]["scheduler"] == "external"
+
+
 async def test_readiness_tracks_schema_and_worker(monkeypatch, client):
     r = await client.get(f"{API}/system/ready")
     assert r.status_code == 200 and r.json()["checks"]["schema"] == "ok"
-    assert r.json()["checks"]["worker"] == "disabled in this process" and r.json()["checks"]["redis"] == "not configured"
+    assert r.json()["checks"]["worker"] == "disabled in this process"
+    assert r.json()["checks"]["redis"] in ("ok", "not configured")
     settings_env(monkeypatch, order_matcher_interval_seconds=5)
     assert (await client.get(f"{API}/system/ready")).json()["checks"]["worker"] == "starting"
     out = await worker.one_pass()
     await worker.heartbeat()
-    assert set(out) == {"matcher", "binary", "anchored"}
+    assert set(out) == {"matcher", "binary", "drift", "anchored"}
     r = await client.get(f"{API}/system/ready")
     assert r.status_code == 200 and r.json()["checks"]["worker"] == "ok"
+
+
+async def test_scheduled_drift_checks_are_due_guarded_and_audited(client, monkeypatch):
+    """The scheduler checks due models, skips recent ones and never retrains/promotes."""
+    from sqlalchemy import func, select
+
+    from app.models import AuditLog, ModelEvaluation
+    from tests.test_ml_api import TRAIN, force_eligible
+
+    ah = await admin_headers(client)
+    v = (await client.post(f"{API}/ml/train", headers=ah, json=TRAIN)).json()
+    await force_eligible(v["id"])
+    assert (await client.post(f"{API}/ml/versions/{v['id']}/promote", headers=ah)).status_code == 200
+
+    out = await worker.one_pass()
+    assert out["drift"]["checked"] == 1 and out["drift"]["errors"] == 0
+    again = await worker.one_pass()
+    assert again["drift"]["checked"] == 0 and again["drift"]["skipped"] == 1
+
+    async with SessionLocal() as db:
+        evs = (await db.scalars(select(ModelEvaluation).where(
+            ModelEvaluation.version_id == v["id"], ModelEvaluation.kind == "drift_check"))).all()
+        assert len(evs) == 1 and evs[0].created_by is None
+        n = await db.scalar(select(func.count()).select_from(AuditLog).where(
+            AuditLog.action == "ml.drift_check_scheduled"))
+    assert n == 1
+    assert (await client.get(f"{API}/ml/versions/{v['id']}", headers=ah)).json()["status"] == "champion"
+
+    settings_env(monkeypatch, ml_drift_monitoring_enabled=False)
+    assert (await worker.one_pass())["drift"]["enabled"] is False
+
+
+async def test_scheduled_worker_revokes_stale_synthetic_eligibility(client):
+    from sqlalchemy import func, select, text
+
+    from app.models import AuditLog
+    from tests.test_ml_api import TRAIN
+
+    ah = await admin_headers(client)
+    v = (await client.post(f"{API}/ml/train", headers=ah, json=TRAIN)).json()
+    async with SessionLocal() as db:
+        await db.execute(text("UPDATE model_versions SET eligible = true WHERE id = :id"), {"id": v["id"]})
+        await db.commit()
+    assert (await worker.one_pass())["drift"]["revoked"] == 1
+    assert (await client.get(f"{API}/ml/versions/{v['id']}", headers=ah)).json()["eligible"] is False
+    async with SessionLocal() as db:
+        n = await db.scalar(select(func.count()).select_from(AuditLog).where(
+            AuditLog.action == "ml.eligibility_revoked"))
+    assert n == 1
 
 
 # -- metrics ----------------------------------------------------------------------------------------------
@@ -176,18 +251,28 @@ async def test_status_and_go_live_gates(monkeypatch, tmp_path, client):
     from app.cli import ops_record
     ah = await admin_headers(client)
     st = (await client.get(f"{API}/admin/ops/status", headers=ah)).json()
-    assert st["live_trading_enabled"] is False and st["gates_total"] == 10
+    assert st["live_trading_enabled"] is False and st["gates_total"] == 15
     gates = {g["key"]: g for g in st["gates"]}
     assert not gates["backups"]["ok"] and gates["backups"]["detail"] == "no backup recorded"
+    assert not gates["offsite_backups"]["ok"] and not gates["offsite_anchors"]["ok"]
     assert gates["audit_chain"]["ok"] and not gates["pentest"]["ok"]
 
     assert await ops_record("backup", "/backups/aurex-2026.dump", "ab" * 32, 1234, True, "") == 0
+    assert await ops_record("offsite-backup", "s3://aurex/aurex-2026.dump", "ab" * 32, 1234, True, "") == 0
+    assert await ops_record("offsite-anchor", "s3://aurex/anchors.jsonl", "cd" * 32, 234, True, "") == 0
     assert await ops_record("restore-drill", "/backups/aurex-2026.dump", "ab" * 32, 1234, True, "7/7 checks") == 0
-    r = await client.post(f"{API}/admin/ops/attestations", headers=ah, json={"gate": "pentest", "reference": "PT-2026-11 report"})
-    assert r.status_code == 200
-    assert (await client.post(f"{API}/admin/ops/attestations", headers=ah, json={"gate": "live", "reference": "x" * 5})).status_code == 422
+    evidence = {"evidence_sha256": "ab" * 32, "reviewed_at": "2026-11-25"}
+    r = await client.post(f"{API}/admin/ops/attestations", headers=ah,
+                          json={"gate": "pentest", "reference": "PT-2026-11 report", **evidence})
+    assert r.status_code == 200, r.text
+    assert (await client.post(f"{API}/admin/ops/attestations", headers=ah,
+                              json={"gate": "live", "reference": "x" * 5, **evidence})).status_code == 422
+    assert (await client.post(f"{API}/admin/ops/attestations", headers=ah,
+                              json={"gate": "pentest", "reference": "PT-2026-11 report",
+                                    "evidence_sha256": "short", "reviewed_at": "2026-11-25"})).status_code == 422
     gates = {g["key"]: g for g in (await client.get(f"{API}/admin/ops/status", headers=ah)).json()["gates"]}
-    assert gates["backups"]["ok"] and gates["restore_drill"]["ok"] and gates["pentest"]["ok"]
+    assert (gates["backups"]["ok"] and gates["offsite_backups"]["ok"] and gates["offsite_anchors"]["ok"]
+            and gates["restore_drill"]["ok"] and gates["pentest"]["ok"])
     assert "PT-2026-11" in gates["pentest"]["detail"]
     uh = await auth_headers(client, email="plain@example.com")
     assert (await client.get(f"{API}/admin/ops/status", headers=uh)).status_code == 403
@@ -195,6 +280,29 @@ async def test_status_and_go_live_gates(monkeypatch, tmp_path, client):
         assert (await controls.get(db, controls.LAST_BACKUP))["file"] == "aurex-2026.dump"   # path stripped
     audit = (await client.get(f"{API}/admin/audit?action=ops.backup", headers=ah)).json()
     assert audit["total"] == 1
+
+
+def test_attestation_requires_evidence_identity_and_fresh_date():
+    from datetime import UTC, datetime, timedelta
+
+    from app.ops.status import attestation_problems
+
+    today = datetime.now(UTC).date()
+    assert attestation_problems(None) == ["not attested"]
+    assert attestation_problems({"reference": "web link only"}) == ["missing or invalid evidence_sha256", "review date missing or invalid"]
+    assert attestation_problems({"evidence_sha256": "ab" * 32, "reviewed_at": (today - timedelta(days=366)).isoformat()}) == ["review date missing or stale"]
+    assert attestation_problems({"evidence_sha256": "ab" * 32, "reviewed_at": today.isoformat()}) == []
+
+
+def test_unsigned_evidence_manifest_blocks_go_live():
+    from app.cli import verify_evidence_manifest
+
+    ok, problems = verify_evidence_manifest()
+    assert not ok
+    assert any("pentest: not signed off" in p for p in problems)
+    assert any("solicitor: not signed off" in p for p in problems)
+    assert any("dpia: not signed off" in p for p in problems)
+    assert any("privacy_policy: not signed off" in p for p in problems)
 
 
 def test_production_guards_for_ops_settings(monkeypatch):

@@ -28,14 +28,16 @@ class CountingProvider(SyntheticProvider):
 class FixedQuote:
     """Provider stub returning a quote of a given age and source."""
 
-    def __init__(self, age: timedelta, source="coinbase", fail=False):
+    def __init__(self, age: timedelta, source="coinbase", fail=False, pricing="actual"):
         self.name, self.age, self.source, self.fail = source, age, source, fail
+        self.pricing = pricing
 
     async def get_quote(self, inst):
         if self.fail:
             raise ProviderError("upstream down")
         p = Decimal("100")
-        return RawQuote(p, p, p, Decimal("90"), datetime.now(UTC) - self.age, self.source)
+        return RawQuote(p, p, p, Decimal("90"), datetime.now(UTC) - self.age,
+                        self.source, self.pricing)
 
     async def get_candles(self, inst, timeframe, start, end):
         if self.fail:
@@ -65,6 +67,7 @@ async def test_overview_groups_all_asset_classes(client):
         "CRYPTO": 3, "FX": 3, "STOCK": 5, "ETF": 3}
     btc = body["groups"]["CRYPTO"][0]
     assert btc["instrument"]["symbol"] == "BTC-USD" and btc["quote"]["source"] == "synthetic"
+    assert btc["quote"]["pricing"] == "simulated"
     assert btc["quote"]["market_open"] is True and btc["quote"]["tradable"] is True
     q = btc["quote"]
     assert Decimal(q["bid"]) < Decimal(q["last"]) < Decimal(q["ask"])
@@ -148,6 +151,44 @@ async def test_reference_rates_are_never_tradable(client):
     assert q["source"] == "ecb_reference" and q["tradable"] is False
 
 
+async def test_live_equities_fail_closed_without_licensed_key(client):
+    h = await auth_headers(client)
+    live_mode()
+    market_service.set_provider("coinbase", FixedQuote(timedelta(0), fail=True))  # no real HTTP
+    r = await client.get(f"{API}/markets/instruments/AAPL/quote", headers=h)
+    assert r.status_code == 503 and r.json()["error"]["code"] == "market_data_unavailable"
+    r = await client.get(f"{API}/markets/instruments/AAPL/candles", headers=h)
+    assert r.status_code == 503
+    body = (await client.get(f"{API}/markets/overview", headers=h)).json()
+    assert body["groups"]["STOCK"][0]["quote"] is None
+    assert all(q is None for q in (g["quote"] for g in body["groups"]["STOCK"] +
+                                   body["groups"]["ETF"]))
+    # No STOCK/ETF quote is silently replaced with synthetic data when the license is absent.
+
+
+async def test_quote_pricing_is_labelled_and_reference_never_tradable(client):
+    h = await auth_headers(client)
+    live_mode()
+    market_service.set_provider("oanda", FixedQuote(timedelta(seconds=1), source="ecb_reference",
+                                                    pricing="reference"))
+    q = (await client.get(f"{API}/markets/instruments/GBPUSD/quote", headers=h)).json()
+    assert q["source"] == "ecb_reference" and q["pricing"] == "reference"
+    assert q["tradable"] is False
+
+    market_service.clear_caches()
+    market_service.set_provider("oanda", FixedQuote(timedelta(seconds=1), source="oanda"))
+    q = (await client.get(f"{API}/markets/instruments/GBPUSD/quote", headers=h)).json()
+    assert q["source"] == "oanda" and q["pricing"] == "actual"
+    assert q["tradable"] is (q["market_open"] and not q["stale"])
+
+    market_service.clear_caches()
+    market_service.set_provider("finnhub", FixedQuote(timedelta(seconds=1), source="finnhub",
+                                                      pricing="estimated_spread"))
+    q = (await client.get(f"{API}/markets/instruments/AAPL/quote", headers=h)).json()
+    assert q["source"] == "finnhub" and q["pricing"] == "estimated_spread"
+    assert q["tradable"] is (q["market_open"] and not q["stale"])
+
+
 async def test_provider_outage_returns_503_not_fake_data(client):
     h = await auth_headers(client)
     live_mode()
@@ -159,7 +200,8 @@ async def test_provider_outage_returns_503_not_fake_data(client):
     # Overview degrades gracefully: the failed quote is null, others still present.
     body = (await client.get(f"{API}/markets/overview", headers=h)).json()
     assert body["groups"]["CRYPTO"][0]["quote"] is None
-    assert body["groups"]["STOCK"][0]["quote"]["source"] == "synthetic"
+    # Live mode must never present an unlicensed/synthetic equity quote as real.
+    assert body["groups"]["STOCK"][0]["quote"] is None
 
 
 async def test_watchlist(client):

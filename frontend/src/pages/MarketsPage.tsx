@@ -21,11 +21,26 @@ const INDICATORS = [
   { key: "sma20", label: "SMA 20" }, { key: "sma50", label: "SMA 50" }, { key: "ema20", label: "EMA 20" },
   { key: "bb20", label: "Bollinger" }, { key: "rsi14", label: "RSI 14" }, { key: "macd", label: "MACD" },
 ];
-const SOURCE_LABEL: Record<string, string> = { synthetic: "Synthetic", coinbase: "Coinbase", ecb_reference: "ECB reference" };
+const SOURCE_LABEL: Record<string, string> = {
+  synthetic: "Synthetic", coinbase: "Coinbase", ecb_reference: "ECB reference",
+  finnhub: "Finnhub", oanda: "OANDA",
+};
+const PRICING_LABEL: Record<string, { label: string; hint: string }> = {
+  actual: { label: "Real bid/ask", hint: "Executable bid and ask from the venue" },
+  estimated_spread: { label: "Derived spread", hint: "Real last price; bid/ask estimated from a configured spread" },
+  reference: { label: "Reference only", hint: "Daily fixing — not tradable" },
+  simulated: { label: "Simulated", hint: "Demo prices, not real market data" },
+};
 
 export function SourceBadge({ source }: { source: string | null | undefined }) {
   if (!source) return null;
   return <Badge tone={source === "synthetic" ? "warning" : "info"} title={source === "synthetic" ? "Simulated prices — not real market data" : undefined}>{SOURCE_LABEL[source] ?? source}</Badge>;
+}
+
+export function PricingBadge({ pricing }: { pricing: string | null | undefined }) {
+  if (!pricing) return null;
+  const info = PRICING_LABEL[pricing] ?? { label: pricing, hint: "Provider pricing mode" };
+  return <Badge tone={pricing === "actual" ? "positive" : "warning"} title={info.hint}>{info.label}</Badge>;
 }
 
 export function QuoteState({ q }: { q: Quote | undefined | null }) {
@@ -147,7 +162,7 @@ export function MarketsPage() {
             <CardHeader
               title={<span className="flex flex-wrap items-center gap-2"><span className="text-base">{selected.instrument.symbol}</span>
                 <span className="font-normal text-muted">{selected.instrument.display_name}</span>
-                <Badge>{selected.instrument.instrument_type}</Badge><SourceBadge source={sq?.source} /></span>}
+                <Badge>{selected.instrument.instrument_type}</Badge><SourceBadge source={sq?.source} /><PricingBadge pricing={sq?.pricing} /></span>}
               description={`${selected.instrument.venue} · quoted in ${selected.instrument.quote_currency}`}
               action={<QuoteState q={sq} />}
             />

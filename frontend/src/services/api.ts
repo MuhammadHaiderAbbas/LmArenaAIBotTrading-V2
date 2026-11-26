@@ -219,6 +219,8 @@ export interface Quote {
   stale: boolean;
   tradable: boolean;
   age_seconds: number;
+  // actual | estimated_spread | reference | simulated
+  pricing?: string;
 }
 
 export interface InstrumentWithQuote { instrument: Instrument; quote: Quote | null }
@@ -305,6 +307,8 @@ export interface ResearchReport extends ReportSummary { body: ReportBody; latenc
 export interface ResearchStatus {
   engine: "extractive" | "claude"; model: string | null; embedding_model: string;
   documents: number; chunks: number; url_ingestion_enabled: boolean;
+  llm_key_configured?: boolean;
+  llm_key_source?: "server_setting" | "environment" | "none";
 }
 
 // ---- AI agents (Phase 5) ----------------------------------------------------------
@@ -531,7 +535,7 @@ export interface IntegrityResult { ok: boolean; checks: { name: string; ok: bool
 export type BinaryDirection = "HIGHER" | "LOWER";
 export type BinaryStatus = "OPEN" | "WON" | "LOST" | "TIE" | "VOID";
 export interface BinaryConfig {
-  payout_rate: number; expiries: number[]; break_even_win_rate: number; coin_flip_expected_return: number;
+  paper_only: boolean; payout_rate: number; expiries: number[]; break_even_win_rate: number; coin_flip_expected_return: number;
   minimum_stake: string; void_after_seconds: number; notice: string;
 }
 export interface BinaryContract {

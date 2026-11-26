@@ -1,0 +1,15 @@
+# Paths that require a fresh legal sign-off before they change.
+# One pattern per line; fnmatch wildcards are supported. Comments and blanks are ignored.
+docs/marketing/
+frontend/src/pages/Marketing*
+frontend/src/pages/Landing*
+backend/app/market/providers/
+backend/app/research/
+backend/app/api/v1/markets.py
+frontend/src/services/demo/market.ts
+frontend/src/services/demo/server.ts
+docs/architecture/market-data.md
+docs/architecture/research-engine.md
+docs/compliance/privacy-policy.md
+docs/compliance/dpia.md
+docs/compliance/stage-1-boundaries.md

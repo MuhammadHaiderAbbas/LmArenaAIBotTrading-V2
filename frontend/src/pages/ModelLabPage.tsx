@@ -31,12 +31,15 @@ function TrainPanel({ onTrained }: { onTrained: (id: string) => void }) {
   const algos = useAlgorithms();
   const overview = useMarketOverview();
   const train = useTrain();
-  const [form, setForm] = useState({ symbol: "BTC-USD", algorithm: "lightgbm", horizon: "4", days: "180" });
+  const [form, setForm] = useState({ symbol: "BTC-USD", algorithm: "", horizon: "4", days: "180" });
   const instruments = Object.values(overview.data?.groups ?? {}).flat().map((g) => g.instrument.symbol);
+  // The demo advertises only browser-runnable algorithms; never submit the live build's
+  // lightgbm default to the static demo (it would be rejected as unsupported).
+  const algorithm = form.algorithm || algos.data?.[0]?.key || "logistic";
   if (user?.role !== "admin") return null;
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const v = await train.mutateAsync({ symbol: form.symbol, algorithm: form.algorithm, horizon: +form.horizon, days: +form.days });
+    const v = await train.mutateAsync({ symbol: form.symbol, algorithm, horizon: +form.horizon, days: +form.days });
     onTrained(v.id);
   }
   return (
@@ -53,7 +56,7 @@ function TrainPanel({ onTrained }: { onTrained: (id: string) => void }) {
               </Select>
             </Field>
             <Field label="Algorithm" htmlFor="ml-algo">
-              <Select id="ml-algo" value={form.algorithm} onChange={(e) => setForm({ ...form, algorithm: e.target.value })}>
+              <Select id="ml-algo" value={algorithm} onChange={(e) => setForm({ ...form, algorithm: e.target.value })}>
                 {(algos.data ?? []).map((a) => <option key={a.key} value={a.key}>{a.label}</option>)}
               </Select>
             </Field>

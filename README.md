@@ -101,10 +101,16 @@ Instead of Postgres installed locally, you can run `docker compose up -d db redi
 
 | Suite | Command | Coverage |
 |---|---|---|
-| Backend (pytest, real Postgres + pgvector) | `make backend-test` | 229 tests: auth, token rotation/reuse, RBAC, tenant isolation, ledger maths and DB invariants, concurrency, idempotency, audit tampering, session calendars (DST/holidays), indicators, synthetic determinism, provider adapters (mocked HTTP), staleness, outage handling, watchlists, WebSocket, research extraction (HTML/PDF/RSS/XXE), retrieval, quote verification, Claude-engine validation and fallbacks, agents (trend/flat/bear, gates, drift, disagreement, sizing, FX, failure isolation), proposals, ML (no look-ahead, purge, metrics, gates, PSI, registry lifecycle, drift, artifact integrity), backtesting (fill timing, costs, gaps, closures, sizing, breakers, causality, IS-only optimisation), paper execution (fill maths, ledger postings, realised P&L, FX conversion, limit/stop matching, expiry, cancel, idempotency, rejections, privacy, append-only executions, DB constraints), risk engine (every check and its boundary, exits through halts, breakers incl. deposits/withdrawals, kill switches, abnormal activity, platform halt, brackets/OCO/resizing, proposal execution and refusal, autopilot, emergency stop), analytics (TWR with cash flows, ratio definitions and minimum history, drawdown duration, trade stats reconciled to the ledger, attribution, execution costs, rejection reasons, signal forward returns, calibration, report hash, CSV exports and formula-injection guard, privacy), security (headers, docs exposure, body and rate limits, password policy, lockout, registration limit, origin checks, session management, JWT rotation and forgery, artifact HMAC, audit export tamper detection, filename sanitising, production guards), two-factor authentication (RFC 6238 vectors, replay, drift, encryption at rest and key rotation, enrolment, recovery codes, attempt limits, admin reset), operations (Redis-shared limits across replicas, fail-open on outage, worker leader election and failover, readiness, metrics auth and route labels, file and signed-webhook anchoring with rewrite/truncation detection, integrity checks, admin 2FA enforcement, go-live gates and attestations, monitoring config consistent with exported metrics) |
+| Backend (pytest, real Postgres + pgvector) | `make backend-test` | 239 tests: auth, token rotation/reuse, RBAC, tenant isolation, ledger maths and DB invariants, concurrency, idempotency, audit tampering, session calendars (DST/holidays), indicators, synthetic determinism, provider adapters (mocked HTTP), staleness, outage handling, watchlists, WebSocket, research extraction (HTML/PDF/RSS/XXE), retrieval, quote verification, Claude-engine validation and fallbacks, agents (trend/flat/bear, gates, drift, disagreement, sizing, FX, failure isolation), proposals, ML (no look-ahead, purge, metrics, gates, PSI, registry lifecycle, drift, artifact integrity), backtesting (fill timing, costs, gaps, closures, sizing, breakers, causality, IS-only optimisation), paper execution (fill maths, ledger postings, realised P&L, FX conversion, limit/stop matching, expiry, cancel, idempotency, rejections, privacy, append-only executions, DB constraints), risk engine (every check and its boundary, exits through halts, breakers incl. deposits/withdrawals, kill switches, abnormal activity, platform halt, brackets/OCO/resizing, proposal execution and refusal, autopilot, emergency stop), analytics (TWR with cash flows, ratio definitions and minimum history, drawdown duration, trade stats reconciled to the ledger, attribution, execution costs, rejection reasons, signal forward returns, calibration, report hash, CSV exports and formula-injection guard, privacy), security (headers, docs exposure, body and rate limits, password policy, lockout, registration limit, origin checks, session management, JWT rotation and forgery, artifact HMAC, audit export tamper detection, filename sanitising, production guards), two-factor authentication (RFC 6238 vectors, replay, drift, encryption at rest and key rotation, enrolment, recovery codes, attempt limits, admin reset), operations (Redis-shared limits across replicas, fail-open on outage, worker leader election and failover, readiness, metrics auth and route labels, file and signed-webhook anchoring with rewrite/truncation detection, integrity checks, admin 2FA enforcement, go-live gates and attestations, monitoring config consistent with exported metrics) |
 | Frontend | `make frontend-build` | strict TypeScript + production build |
-| End-to-end (Playwright) | `make e2e` | register → paper account → deposit/withdraw → session restore → logout; admin audit verification; RBAC; live market streaming and charts; research corpus and grounded reports; agent desk; model lab; backtesting; paper trading (market buy, resting limit, rejection, cancel, close position, history, ledger); risk centre (limit change, rejection with checks, bracket order, kill switch, autopilot cycle, emergency stop; platform halt in the demo); analytics (every tab, report hash, CSV download); sessions panel; audit export; two-factor enrolment and sign-in; operations page (integrity check, attestation, anchoring in the demo) |
-| Static demo | `npm run build:demo` then `AUREX_E2E_DEMO=1 AUREX_WEB_URL=… npx playwright test e2e/demo.spec.ts` | the GitHub Pages build, served under its sub-path |
+| Supabase Edge Functions | `deno check edge-functions/*/index.ts && bash scripts/check-edge-functions.sh` | Deno type-check plus CORS allowlist, proxied HTTPS, AAL2, shared Postgres limits and paper-only contract; runs in CI without project credentials |
+| Rule parity | `npm run check:parity` (from `frontend/`) | static check that the browser demo and Python backend agree on calendar, risk, cost and binary rules |
+| End-to-end (Playwright) | `make e2e` (builds first, then `vite preview`) | register → paper account → deposit/withdraw → session restore → logout; admin audit verification; RBAC; live market streaming and charts; research corpus and grounded reports; agent desk; model lab; backtesting; paper trading (market buy, resting limit, rejection, cancel, close position, history, ledger); risk centre (limit change, rejection with checks, bracket order, kill switch, autopilot cycle, emergency stop; platform halt in the demo); analytics (every tab, report hash, CSV download); sessions panel; audit export; two-factor enrolment and sign-in; operations page (integrity check, attestation, anchoring in the demo) |
+| Static demo | `npm run build:demo` then `AUREX_E2E_DEMO=1 AUREX_WEB_URL=… npx playwright test e2e/demo.spec.ts` | the GitHub Pages build, served under its sub-path; SIMULATED DATA banner |
+| Deployed builds | `AUREX_E2E_DEPLOYED=1 AUREX_E2E_DEMO=1 AUREX_WEB_URL=<site root> npx playwright test e2e/deployed.spec.ts e2e/demo.spec.ts` | post-deploy Pages job exercises the published demo and the paper-only live shell |
+| Live API build | `npm run build:live` (needs `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`) | `live.html` → `dist-live/index.html`, real Supabase Edge API, bundled CSP meta |
+
+GitHub Pages publishes both: the simulated demo at `/<repo>/` and the real-API build at `/<repo>/live/`. The live build fails fast if its Supabase build-time values are missing.
 
 For the admin e2e test, set `AUREX_E2E_ADMIN_EMAIL` and `AUREX_E2E_ADMIN_PASSWORD`.
 
@@ -162,8 +168,13 @@ infrastructure/   monitoring and deployment (populated in Phase 11)
 - [x] Watchlists and WebSocket quote streaming
 - [x] Markets screen with candlestick charts; public GitHub Pages demo
 
-Market data runs in `synthetic` mode by default. Set `AUREX_MARKET_DATA_MODE=live` for
-Coinbase and ECB data (the server needs outbound access to those hosts).
+Market data runs in `synthetic` mode by default (clearly labelled simulated data). In `live`
+mode crypto stays on Coinbase, stocks/ETFs need `AUREX_FINNHUB_API_KEY` (licensed feed;
+no synthetic fallback), and FX uses `AUREX_OANDA_API_KEY` + `AUREX_OANDA_ACCOUNT_ID`
+for real bid/ask quotes. Without OANDA credentials FX degrades to ECB fixings labelled
+`ecb_reference`, which are never tradable. Every quote carries a `pricing` label
+(`actual`, `estimated_spread`, `reference`, `simulated`). Set `AUREX_REDIS_URL` and
+`AUREX_STREAM_FANOUT_ENABLED=true` for cross-replica WebSocket fan-out via Redis Streams.
 
 ## Phase 4 deliverables
 
@@ -175,7 +186,27 @@ Coinbase and ECB data (the server needs outbound access to those hosts).
 - [x] Offline extractive engine (default) and a Claude engine (`claude-opus-5-5`) with automatic fallback
 - [x] Research Lab UI (ask, report view with citations, corpus management, search); works in the static demo
 
-Set `AUREX_RESEARCH_ENGINE=claude` and provide `ANTHROPIC_API_KEY` to use Claude.
+Set `AUREX_RESEARCH_ENGINE=claude` and provide `AUREX_CLAUDE_API_KEY` (server-side; file
+form supported) or `ANTHROPIC_API_KEY` to use Claude. `/research/status` reports only the
+credential source, never the key.
+
+## Data completeness additions
+
+- [x] OCR fallback for scanned PDFs (Tesseract), with OCR pages recorded on the document
+- [x] Crypto perp positioning/funding feed (opt-in, venue-labelled, fail-open) feeding sentiment evidence
+- [x] Fundamental ratios/valuation with licensed vendor metrics or cited document extraction
+- [x] Server-side Claude key configuration and non-leaking status reporting
+- [x] Promotion-time real-data gates re-derived from stored evidence; stale synthetic flags cleared and failed attempts audited
+- [x] Scheduled drift monitoring via `worker-once` (6-hour default), with no auto-retrain or auto-promote
+- [x] Static demo deliberately stays logistic-only: RF/LightGBM need the Python backend, so the demo advertises only what it can run
+
+## Final hardening
+
+- [x] Live trading stays hard-disabled: no environment override, a `PAPER`-only database constraint, and automated source guard checks
+- [x] `npm run check:parity` compares 23 demo/backend rule groups (calendar, early closes, costs, risk limits, binary terms, safety boundaries) and runs in CI and both Pages builds
+- [x] Calendar/order edge cases: early sessions in the demo match the backend, and DAY orders expire at the trading-session close (including half days) instead of UTC midnight
+- [x] Admin MFA cannot be disabled in staging/production; live surfaces still show `PAPER ONLY · MFA REQUIRED`
+- [x] Binary contracts remain paper-only with a machine-readable `paper_only` flag and an explicit UK/EU retail warning in both builds
 
 ## Phase 5 deliverables
 
@@ -271,6 +302,41 @@ Set `AUREX_RESEARCH_ENGINE=claude` and provide `ANTHROPIC_API_KEY` to use Claude
 - [x] Admin 2FA enforced outside development; admin Operations page (health, worker, backups, anchoring, integrity check, go-live gates, attestations)
 - [x] Tag-triggered release workflow: builds, scans and pushes the backend, ops and web images to GHCR
 - [x] Deployment guide and runbooks (`docs/operations/`)
+
+## Soft launch (ADR 049)
+
+- [x] Unmistakable paper-trading banner on every screen and auth state in the full app, the
+      static demo and the live build. Live trading stays disabled; balances are virtual.
+- [x] Unauthenticated `/status` page and `GET /api/v1/system/status`: phase, version, safe
+      readiness checks and plain-language announcements, with no admin/ops leakage.
+- [x] Feedback loop: public `/feedback` page → rate-limited `POST /api/v1/feedback` → audited
+      `feedback_submissions` table → admin review at `GET /api/v1/admin/feedback`. The demo
+      stores the same records in localStorage only.
+- [x] Legal re-review gate: changes under `compliance/protected-paths.txt` (marketing copy,
+      data providers, privacy disclosures, public copy) fail CI unless a fresh signed review
+      is recorded in `compliance/legal-review.json`. The go-live evidence check blocks too.
+
+The legal review is deliberately unsigned: soft launch may proceed, but marketing or data
+changes cannot ship until UK counsel/the DPO signs `docs/compliance/legal-review.md`.
+
+## Enforceable go-live evidence (ADR 048)
+
+- [x] Five required attestations: external penetration test, UK solicitor review, GDPR DPIA,
+      privacy policy and broker sandbox certification. Each needs a reviewer, an ISO review
+      date and a 64-hex `evidence_sha256`, not just a reference string.
+- [x] `compliance/evidence-manifest.json` + `python scripts/check_compliance_evidence.py`
+      verify signed documents, hashes, review dates and off-site automation. The check is a
+      required job in the release and deploy workflows.
+- [x] Automated verified off-site copies of backups and audit anchors via rclone
+      (`backend/ops/backup/offsite.sh`), wired into the daily backup scheduler with freshness
+      gates (30 h) and Prometheus page alerts.
+- [x] Monitoring gate requires both a metrics token and an Alertmanager webhook.
+- [x] `python -m app.cli go-live-check` prints JSON and exits **1** while any gate is red,
+      evidence is unsigned/mismatched, or live trading is enabled.
+
+Draft compliance documents in `docs/compliance/` are deliberately **unsigned**: the gate
+blocks until an independent tester, UK counsel and the privacy owner sign real reports and
+their hashes are recorded. No live trading has been enabled.
 
 Live trading remains disabled by design. The go-live gates are the precondition for a future,
 separately reviewed change. They are not a switch.

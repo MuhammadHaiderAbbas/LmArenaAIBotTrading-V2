@@ -15,6 +15,7 @@ while true; do
   echo "next backup at $(date -u -d "@$next" '+%Y-%m-%d %H:%M UTC')"
   sleep $(( next - now ))
   if "$here/backup.sh"; then
+    "$here/offsite.sh" || echo "off-site copy failed (recorded)" >&2
     if [[ "$(date -u +%u)" == "$DRILL_WEEKDAY" ]]; then "$here/restore-drill.sh" || echo "restore drill failed (recorded)"; fi
   else
     echo "backup failed" >&2

@@ -95,7 +95,8 @@ async def test_corpus_listing_and_search(client):
     assert {h["document"]["symbols"][0] for h in hits} == {"EUR/USD"}
     status = (await client.get(f"{API}/research/status", headers=ah)).json()
     assert status == {"engine": "extractive", "model": None, "embedding_model": "hashing-v1-384",
-                      "documents": 7, "chunks": 7, "url_ingestion_enabled": False}
+                      "documents": 7, "chunks": 7, "url_ingestion_enabled": False,
+                      "llm_key_configured": False, "llm_key_source": "none"}
 
 
 async def test_extractive_report_is_grounded(client):

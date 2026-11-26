@@ -22,11 +22,22 @@ x-backend: &backend
     AUREX_DATA_KEY_FILE: /run/secrets/data_key
     AUREX_ARTIFACT_KEY_FILE: /run/secrets/artifact_key
     AUREX_METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    AUREX_ALERTMANAGER_WEBHOOK_URL: ${AUREX_ALERTMANAGER_WEBHOOK_URL:-}
     AUREX_AUDIT_ANCHOR_FILE: /anchors/aurex-anchors.jsonl
     AUREX_AUDIT_ANCHOR_WEBHOOK_URL: ${AUREX_AUDIT_ANCHOR_WEBHOOK_URL:-}
+    AUREX_BACKGROUND_WORKER: "false"            # jobs run in the external scheduler, not API replicas
+    AUREX_EXTERNAL_SCHEDULER: "true"             # /system/ready watches the scheduler heartbeat
     AUREX_MARKET_DATA_MODE: ${AUREX_MARKET_DATA_MODE:-live}
+    AUREX_FINNHUB_API_KEY_FILE: /run/secrets/finnhub_api_key
+    AUREX_OANDA_API_KEY_FILE: /run/secrets/oanda_api_key
+    AUREX_OANDA_ACCOUNT_ID: ${AUREX_OANDA_ACCOUNT_ID:-}
+    AUREX_STREAM_FANOUT_ENABLED: ${AUREX_STREAM_FANOUT_ENABLED:-true}
+    AUREX_RESEARCH_ENGINE: ${AUREX_RESEARCH_ENGINE:-extractive}
+    AUREX_CLAUDE_API_KEY_FILE: /run/secrets/claude_api_key
+    AUREX_OCR_ENABLED: ${AUREX_OCR_ENABLED:-true}
     FORWARDED_ALLOW_IPS: 172.29.0.10           # only the edge proxy may set X-Forwarded-For
-  secrets: [database_url, redis_url, jwt_secret, data_key, artifact_key, metrics_token]
+  secrets: [database_url, redis_url, jwt_secret, data_key, artifact_key, metrics_token,
+            finnhub_api_key, oanda_api_key, claude_api_key]
   read_only: true
   tmpfs: [/tmp]
   cap_drop: [ALL]
@@ -38,7 +49,7 @@ services:
   backend:
     <<: *backend
     volumes: [audit_anchors:/anchors]
-    deploy: { replicas: 2 }                     # the background worker elects a single leader
+    deploy: { replicas: 2 }                     # API only; the scheduler owns background jobs
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/ready').status==200 else 1)"]
       interval: 15s
@@ -93,8 +104,12 @@ services:
       BACKUP_AT: ${BACKUP_AT:-02:15}
       DRILL_WEEKDAY: ${DRILL_WEEKDAY:-7}
       BACKUP_GPG_RECIPIENT: ${BACKUP_GPG_RECIPIENT:-}
-    secrets: [database_url, redis_url, jwt_secret, data_key, artifact_key, metrics_token, drill_admin_url]
-    volumes: [backups:/backups]
+      ANCHOR_DIR: /anchors
+      OFFSITE_REMOTE: ${OFFSITE_REMOTE:-}
+      RCLONE_CONFIG_FILE: /run/secrets/rclone_conf
+    secrets: [database_url, redis_url, jwt_secret, data_key, artifact_key, metrics_token,
+              finnhub_api_key, oanda_api_key, claude_api_key, drill_admin_url, rclone_conf]
+    volumes: [backups:/backups, audit_anchors:/anchors]
     entrypoint: ["sh", "-c", "export DATABASE_URL=\"$$(cat /run/secrets/database_url)\" DRILL_ADMIN_URL=\"$$(cat /run/secrets/drill_admin_url)\"; exec /opt/aurex/backup/schedule.sh"]
     networks: [internal]
 
@@ -127,12 +142,16 @@ services:
 secrets:
   database_url: { file: ./secrets/database_url }
   drill_admin_url: { file: ./secrets/drill_admin_url }
+  rclone_conf: { file: ./secrets/rclone_conf }
   redis_url: { file: ./secrets/redis_url }
   redis_password: { file: ./secrets/redis_password }
   jwt_secret: { file: ./secrets/jwt_secret }
   data_key: { file: ./secrets/data_key }
   artifact_key: { file: ./secrets/artifact_key }
   metrics_token: { file: ./secrets/metrics_token }
+  finnhub_api_key: { file: ./secrets/finnhub_api_key }
+  oanda_api_key: { file: ./secrets/oanda_api_key }
+  claude_api_key: { file: ./secrets/claude_api_key }
   grafana_admin_password: { file: ./secrets/grafana_admin_password }
 
 networks:

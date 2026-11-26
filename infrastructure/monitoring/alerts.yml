@@ -54,6 +54,16 @@ groups:
         for: 30m
         labels: { severity: page }
         annotations: { summary: "No successful database backup in 26 hours" }
+      - alert: AurexOffsiteBackupStale
+        expr: aurex_last_offsite_backup_age_seconds > 30 * 3600 or absent(aurex_last_offsite_backup_age_seconds)
+        for: 30m
+        labels: { severity: page }
+        annotations: { summary: "No verified off-site backup copy in 30 hours" }
+      - alert: AurexOffsiteAnchorStale
+        expr: aurex_last_offsite_anchor_age_seconds > 30 * 3600 or absent(aurex_last_offsite_anchor_age_seconds)
+        for: 30m
+        labels: { severity: page }
+        annotations: { summary: "No verified off-site audit-anchor copy in 30 hours" }
       - alert: AurexRestoreDrillStale
         expr: aurex_last_restore_drill_age_seconds > 8 * 86400
         labels: { severity: ticket }

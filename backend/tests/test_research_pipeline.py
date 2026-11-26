@@ -85,3 +85,18 @@ def test_feed_parsing_rss_atom_and_xxe():
       <rss><channel><item><title>&x;</title><description>x</description></item></channel></rss>"""
     with pytest.raises(BusinessRuleViolation):
         parse_feed(xxe)
+
+
+def test_ocr_extracts_text_from_scanned_pdf():
+    import shutil
+
+    from tests.pdfgen import make_scanned_pdf
+
+    if not shutil.which("tesseract"):
+        pytest.skip("tesseract binary not installed")
+    pdf = make_scanned_pdf("Revenue grew 18 percent")
+    out = extract(pdf, "application/pdf", "scan")
+    assert out.ocr_pages == [1]
+    assert "Revenue grew" in out.sections[0].text
+    chunks = chunk_sections(out.sections)
+    assert chunks[0].page == 1

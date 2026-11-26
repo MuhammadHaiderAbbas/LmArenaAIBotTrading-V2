@@ -59,7 +59,7 @@ class ResearchService:
     async def ingest(
         self, extracted: Extracted, *, source_name: str, source_url: str | None,
         published_at: datetime | None, doc_type: str | None, created_by: uuid.UUID | None,
-        is_sample: bool = False,
+        is_sample: bool = False, ocr_pages: list[int] | None = None,
     ) -> tuple[ResearchDocument, bool]:
         """Returns (document, created). Identical content is deduplicated by hash."""
         full = "\n\n".join(s.text for s in extracted.sections)
@@ -84,6 +84,7 @@ class ResearchService:
             published_at=published_at, retrieved_at=datetime.now(UTC), content_hash=digest,
             word_count=words,
             page_count=max((s.page or 0 for s in extracted.sections), default=0) or None,
+            ocr_pages=ocr_pages or [],
             symbols=cls.tag_instruments(f"{title}\n{full}", aliases),
             sentiment=cls.sentiment(full), is_sample=is_sample, created_by=created_by,
         )

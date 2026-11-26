@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import BusinessRuleViolation, NotFound
+from app.market.calendar import day_expiry
 from app.market.service import MarketService, ProviderUnavailable, fx_rate
 from app.models import (
     AccountStatus,
@@ -142,7 +143,7 @@ class TradingService:
         inst = await self.market.get(req.symbol)
         self._validate_shape(req, inst)
         now = datetime.now(UTC)
-        expires = (datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+        expires = (day_expiry(inst.market, now)
                    if req.time_in_force == "DAY" else now + timedelta(days=GTC_DAYS))
         order = Order(account_id=acct.id, user_id=user.id, instrument_id=inst.id, symbol=inst.symbol, side=req.side,
                       type=req.type, quantity=req.quantity, limit_price=req.limit_price, stop_price=req.stop_price,

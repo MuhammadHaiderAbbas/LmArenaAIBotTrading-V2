@@ -45,6 +45,7 @@ class ResearchDocument(UUIDPk, Base):
     content_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     word_count: Mapped[int] = mapped_column(Integer, nullable=False)
     page_count: Mapped[int | None] = mapped_column(Integer)
+    ocr_pages: Mapped[list[int]] = mapped_column(ARRAY(Integer), nullable=False, default=list)
     symbols: Mapped[list[str]] = mapped_column(ARRAY(String(32)), nullable=False, default=list)
     sentiment: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     is_sample: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
