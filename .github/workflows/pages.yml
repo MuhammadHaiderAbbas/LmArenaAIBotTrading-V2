@@ -76,7 +76,7 @@ jobs:
         if: env.LIVE_BUILD_CONFIGURED != 'true'
         run: echo "::notice::VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY secrets are not set; publishing the demo only."
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with: { path: frontend/dist }
 
   deploy:
