@@ -22,6 +22,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }
+    env:
+      LIVE_BUILD_CONFIGURED: ${{ secrets.VITE_SUPABASE_URL != '' && secrets.VITE_SUPABASE_ANON_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,6 +48,7 @@ jobs:
           AUREX_E2E_DEMO=1 AUREX_WEB_URL="http://localhost:4173$VITE_BASE" npx playwright test e2e/demo.spec.ts --trace off
 
       - name: Build live API build
+        if: env.LIVE_BUILD_CONFIGURED == 'true'
         env:
           VITE_BASE: /${{ github.event.repository.name }}/live/
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -53,6 +56,7 @@ jobs:
         run: npm run build:live:pages
 
       - name: Verify live build configuration (values not printed)
+        if: env.LIVE_BUILD_CONFIGURED == 'true'
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
         run: |
@@ -67,6 +71,10 @@ jobs:
             throw new Error("live build does not contain the configured API URL");
           console.log("live build has CSP and points at the configured API");
           '
+
+      - name: Notice live build skipped
+        if: env.LIVE_BUILD_CONFIGURED != 'true'
+        run: echo "::notice::VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY secrets are not set; publishing the demo only."
 
       - uses: actions/upload-pages-artifact@v3
         with: { path: frontend/dist }
@@ -92,6 +100,7 @@ jobs:
       AUREX_WEB_URL: ${{ needs.deploy.outputs.page_url }}
       AUREX_E2E_DEPLOYED: "1"
       AUREX_E2E_DEMO: "1"
+      AUREX_LIVE_DEPLOYED: ${{ secrets.VITE_SUPABASE_URL != '' && secrets.VITE_SUPABASE_ANON_KEY != '' }}
       AUREX_LIVE_URL: live/
       AUREX_LIVE_EMAIL: ${{ secrets.AUREX_E2E_LIVE_EMAIL }}
       AUREX_LIVE_PASSWORD: ${{ secrets.AUREX_E2E_LIVE_PASSWORD }}
