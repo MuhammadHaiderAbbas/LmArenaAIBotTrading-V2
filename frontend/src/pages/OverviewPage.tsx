@@ -9,6 +9,7 @@ import { Stat } from "@/components/ui/stat";
 import { Table, Td, Th, Tr } from "@/components/ui/table";
 import { CreateAccountDialog } from "@/features/accounts/CreateAccountDialog";
 import { useAccounts, useMyActivity } from "@/features/accounts/hooks";
+import { useActiveAccountId } from "@/features/accounts/activeAccount";
 import { useLiveQuotes, useWatchlist } from "@/features/markets/hooks";
 import { PortfolioChart } from "@/charts/PortfolioChart";
 import { useLiveEquity } from "@/features/live/stream";
@@ -61,13 +62,15 @@ export function OverviewPage() {
   const activity = useMyActivity();
   const [creating, setCreating] = useState(false);
   const list = accounts.data ?? [];
+  const activeId = useActiveAccountId();
+  const current = list.find((a) => a.id === activeId) ?? list[0];
   const totals = totalsByCurrency(list);
   const primary = totals[0];
-  const portfolio = usePortfolio(list[0]?.id);
+  const portfolio = usePortfolio(current?.id);
   const pf = portfolio.data;
-  const history = usePortfolioHistory(list[0]?.id);
-  const liveEquity = useLiveEquity(list[0]?.id);
-  const risk = useRiskOverview(list[0]?.id).data;
+  const history = usePortfolioHistory(current?.id);
+  const liveEquity = useLiveEquity(current?.id);
+  const risk = useRiskOverview(current?.id).data;
   const pnl = pf ? Number(pf.unrealised_pnl) + Number(pf.realised_pnl) : 0;
 
   return (

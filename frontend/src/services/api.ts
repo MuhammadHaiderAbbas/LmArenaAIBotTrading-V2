@@ -230,7 +230,8 @@ export interface MarketStatus { market: string; label: string; is_open: boolean;
 export interface MarketOverview {
   markets: MarketStatus[];
   groups: Record<AssetClass, InstrumentWithQuote[]>;
-  data_mode: "synthetic" | "live";
+  data_mode: "synthetic" | "mixed" | "live";
+  price_source_note?: string;
 }
 
 export interface Candle { open_time: string; open: string; high: string; low: string; close: string; volume: string }
@@ -543,6 +544,7 @@ export interface BinaryContract {
   payout_rate: number; potential_return: string; strike: string; expiry_seconds: number; opened_at: string; expires_at: string;
   status: BinaryStatus; settle_price: string | null; settle_price_at: string | null; settled_at: string | null;
   returned: string | null; pnl: string | null; void_reason: string | null; client_id: string | null;
+  price_source?: string; settle_source?: string;
 }
 export interface BinaryGroupStats {
   contracts: number; open: number; won: number; lost: number; ties: number; void: number; staked: string; net_pnl: string;

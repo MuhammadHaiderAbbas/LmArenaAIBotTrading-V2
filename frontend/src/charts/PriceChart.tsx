@@ -1,6 +1,6 @@
 import {
   CandlestickSeries, ColorType, createChart, CrosshairMode, HistogramSeries, LineSeries,
-  type IChartApi, type ISeriesApi, type LogicalRange, type UTCTimestamp,
+  type IChartApi, type IPriceLine, type ISeriesApi, type LogicalRange, type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
 import type { CandlesResponse } from "@/services/api";
@@ -17,12 +17,16 @@ const SUB_PANE = 120;
 const TF_SECONDS: Record<string, number> = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 };
 type Bar = { time: UTCTimestamp; open: number; high: number; low: number; close: number };
 
+export interface ChartPriceLine { id: string; price: number; title: string; color: string }
+
+
 /**
  * Candlestick chart. With `live`, the last candle ticks with every streamed quote and a new
  * candle opens when the timeframe rolls over, without rebuilding the chart (zoom is kept).
  */
-export function PriceChart({ data, decimals, height: mainHeight = 420, live }: {
+export function PriceChart({ data, decimals, height: mainHeight = 420, live, priceLines = [], testId = "price-chart" }: {
   data: CandlesResponse; decimals: number; height?: number; live?: { price: number; at: string } | null;
+  priceLines?: ChartPriceLine[]; testId?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -31,6 +35,10 @@ export function PriceChart({ data, decimals, height: mainHeight = 420, live }: {
   const subPanes = (data.indicators.rsi14 ? 1 : 0) + (data.indicators.macd ? 1 : 0);
   const height = mainHeight + subPanes * SUB_PANE;
   const chartRef = useRef<IChartApi | null>(null);
+  const priceLineRef = useRef<IPriceLine[]>([]);
+  const priceLinesRef = useRef(priceLines);
+  priceLinesRef.current = priceLines;
+  const linesKey = priceLines.map((l) => `${l.id}:${l.price}:${l.title}:${l.color}`).join("|");
 
   useEffect(() => {
     const el = ref.current;
@@ -65,6 +73,9 @@ export function PriceChart({ data, decimals, height: mainHeight = 420, live }: {
     const bars = data.candles.map((c, i) => ({ time: times[i]!, open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
     candles.setData(bars);
     seriesRef.current = candles;
+    priceLineRef.current = priceLinesRef.current.map((l) => candles.createPriceLine({
+      price: l.price, color: l.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: l.title,
+    }));
     lastBar.current = bars.length ? { ...bars[bars.length - 1]! } : null;
 
     const vol = chart.addSeries(HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
@@ -111,9 +122,10 @@ export function PriceChart({ data, decimals, height: mainHeight = 420, live }: {
     else chart.timeScale().fitContent();
     return () => {
       range.current = { key, range: chart.timeScale().getVisibleLogicalRange() };   // keep the zoom across refetches
+      priceLineRef.current = [];
       chart.remove(); chartRef.current = null; seriesRef.current = null;
     };
-  }, [data, decimals, height, mainHeight, subPanes]);
+  }, [data, decimals, height, mainHeight, subPanes, linesKey]);
 
   useEffect(() => {
     const series = seriesRef.current, prev = lastBar.current;
@@ -129,5 +141,5 @@ export function PriceChart({ data, decimals, height: mainHeight = 420, live }: {
     lastBar.current = next;
   }, [live, data.timeframe]);
 
-  return <div ref={ref} className="w-full" style={{ height }} data-testid="price-chart" />;
+  return <div ref={ref} className="w-full" style={{ height }} data-testid={testId} />;
 }

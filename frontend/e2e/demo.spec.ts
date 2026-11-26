@@ -26,15 +26,15 @@ test("static demo: launch, markets, wallet, admin, deep links", async ({ page })
   await expect(page.getByText("US$100,000.00").first()).toBeVisible();
   await expect(page.getByTestId("live-status")).toContainText(/Live · polling/i);
 
-  // Markets: synthetic data clearly labelled, chart renders, indicators toggle
+  // Markets: data sources clearly labelled, chart renders, indicators toggle
   await page.getByRole("link", { name: "Markets", exact: true }).click();
-  await expect(page.getByText("Synthetic data")).toBeVisible();
+  await expect(page.getByText("Mixed data")).toBeVisible();
   await expect(page.getByTestId("price-chart").locator("canvas").first()).toBeVisible();
   await page.getByRole("tab", { name: "Forex" }).click();
   await page.getByRole("button", { name: /^GBP\/USD British/ }).click();
   await expect(page).toHaveURL(/symbol=GBPUSD/);
   await page.getByRole("button", { name: "1d" }).click();
-  await expect(page.getByText(/\d+ candles · source Synthetic/)).toBeVisible();
+  await expect(page.getByText(/\d+ OHLC candles · source Synthetic/)).toBeVisible();
 
   // Wallet: double-entry ledger in the browser
   await page.getByRole("link", { name: "Wallet", exact: true }).click();

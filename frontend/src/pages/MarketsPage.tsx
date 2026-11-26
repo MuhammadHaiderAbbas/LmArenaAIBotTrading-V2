@@ -106,6 +106,7 @@ export function MarketsPage() {
           <Radio className={cn("size-3.5", live ? "text-positive" : "text-subtle")} />
           {live ? "Streaming" : "Polling"}
           {overview.data?.data_mode === "synthetic" && <Badge tone="warning" title="Prices are generated deterministically for development. They are not real market data.">Synthetic data</Badge>}
+          {overview.data?.data_mode === "mixed" && <Badge tone="warning" title={overview.data.price_source_note ?? "Crypto uses public data; other instruments are simulated."}>Mixed data</Badge>}
         </div>
       </div>
 
@@ -212,7 +213,7 @@ export function MarketsPage() {
                 <EmptyState title="No candles for this timeframe" />
               )}
               <p className="px-3 pt-2 text-[10px] text-subtle">
-                {candles.data?.candles.length ?? 0} candles · source {SOURCE_LABEL[candles.data?.source ?? ""] ?? candles.data?.source ?? "—"} · charts by TradingView Lightweight Charts
+                {candles.data?.candles.length ?? 0} OHLC candles · source {SOURCE_LABEL[candles.data?.source ?? ""] ?? candles.data?.source ?? "—"}{candles.data?.source === "coinbase" ? " (real public data)" : " (simulated, not real market data)"} · charts by TradingView Lightweight Charts
               </p>
             </div>
           </Card>

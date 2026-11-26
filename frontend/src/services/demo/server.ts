@@ -9,6 +9,7 @@
 import { fromUnits, toUnits } from "@/lib/utils";
 import { INSTRUMENTS } from "./instruments";
 import * as mkt from "./market";
+import { cachedLiveQuote, isLiveCrypto, liveCandles, liveQuote } from "./liveMarket";
 import * as rs from "./research";
 import * as ag from "./agents";
 import * as ml from "./ml";
@@ -17,8 +18,11 @@ import * as risk from "./risk";
 import * as an from "./analytics";
 import * as totp from "./totp";
 
-const KEY = "aurex-demo-v1";
-const REFRESH_KEY = "aurex-demo-refresh";
+// v2: old demo accounts/candles from v1 are discarded on load so a stale local account
+// never masquerades as the current soft-launch state.
+const KEY = "aurex-demo-v2";
+const REFRESH_KEY = "aurex-demo-refresh-v2";
+try { localStorage.removeItem("aurex-demo-v1"); localStorage.removeItem("aurex-demo-refresh"); } catch { /* ignore */ }
 const MAX_BALANCE = toUnits("10000000");
 const MIN_ORDER_VALUE = 1;   // account currency; entry orders only (mirrors AUREX_MIN_ORDER_VALUE)
 const MONEY_RE = /^\d+(\.\d{1,8})?$/;
@@ -41,7 +45,7 @@ interface DAccount { id: string; owner_id: string; name: string; mode: "PAPER"; 
 interface DAudit { id: number; occurred_at: string; actor_user_id: string | null; action: string; resource_type: string | null; resource_id: string | null; outcome: string; ip_address: string | null; request_id: string | null; details: Record<string, unknown>; prev_hash: string; hash: string }
 interface DOrder { id: string; account_id: string; user_id: string; symbol: string; side: "BUY" | "SELL"; type: "MARKET" | "LIMIT" | "STOP"; quantity: string; limit_price: string | null; stop_price: string | null; time_in_force: "GTC" | "DAY"; status: string; filled_qty: string; avg_fill_price: string | null; client_order_id: string | null; source: string; reject_reason: string | null; expires_at: string | null; created_at: string; updated_at: string; events: { type: string; detail: Record<string, unknown>; created_at: string }[]; stop_loss: string | null; take_profit: string | null; parent_order_id: string | null; oco_group: string | null; proposal_id: string | null }
 interface DRisk extends risk.Limits { kill_switch: boolean; kill_reason: string | null; kill_engaged_at: string | null; daily_halt_date: string | null; drawdown_halted: boolean; drawdown_halted_at: string | null; peak_pnl_equity: number | null; day_date: string | null; day_start_pnl_equity: number | null; day_start_equity: number | null; autopilot_status: "STOPPED" | "RUNNING" | "PAUSED"; autopilot_symbols: string[]; autopilot_last_cycle_at: string | null; binary_enabled?: boolean }
-interface DBinary { id: string; account_id: string; user_id: string; symbol: string; direction: "HIGHER" | "LOWER"; stake: string; currency: string; payout_rate: number; strike: string; expiry_seconds: number; opened_at: string; expires_at: string; status: "OPEN" | "WON" | "LOST" | "TIE" | "VOID"; settle_price: string | null; settle_price_at: string | null; settled_at: string | null; returned: string | null; pnl: string | null; void_reason: string | null; client_id: string | null }
+interface DBinary { id: string; account_id: string; user_id: string; symbol: string; direction: "HIGHER" | "LOWER"; stake: string; currency: string; payout_rate: number; strike: string; expiry_seconds: number; opened_at: string; expires_at: string; status: "OPEN" | "WON" | "LOST" | "TIE" | "VOID"; settle_price: string | null; settle_price_at: string | null; settled_at: string | null; returned: string | null; pnl: string | null; void_reason: string | null; client_id: string | null; price_source?: string; settle_source?: string }
 interface DDecision { id: string; account_id: string; order_id: string | null; binary_id?: string | null; proposal_id: string | null; source: string; symbol: string; side: string; approved: boolean; reason: string | null; checks: risk.Check[]; created_at: string }
 interface DPosition { id: string; account_id: string; symbol: string; quantity: string; avg_price: string; cost_basis: string; realised_pnl: string; fees: string; status: "OPEN" | "CLOSED"; opened_at: string; closed_at: string | null }
 interface State {
@@ -190,15 +194,15 @@ function findInst(sym: string) {
   if (!i) throw new HttpError(404, "not_found", `Unknown instrument ${sym}`);
   return i;
 }
-const withQuote = (i: mkt.DemoInstrument) => ({ instrument: instRead(i), quote: mkt.quote(i) });
+const withQuote = async (i: mkt.DemoInstrument) => ({ instrument: instRead(i), quote: await liveQuote(i.symbol, i.price_decimals) ?? mkt.quote(i) });
 const LABELS: Record<string, string> = { CRYPTO_24_7: "Crypto (24/7)", FX_24_5: "Forex (24/5)", US_EQUITY: "US equities (NYSE/Nasdaq)", UK_EQUITY: "UK equities (LSE)" };
 const marketStatuses = () => Object.entries(LABELS).map(([m, label]) => {
   const st = mkt.status(m as mkt.MarketKey, Date.now());
   return { market: m, label, is_open: st.is_open, next_change: st.next_change ? new Date(st.next_change).toISOString() : null };
 });
-function watchlist(s: State, userId: string) {
+async function watchlist(s: State, userId: string) {
   s.watchlists[userId] ??= ["BTC-USD", "EUR/USD", "AAPL", "SPY"];
-  return { id: `wl-${userId}`, name: "Default", items: s.watchlists[userId]!.map((sym) => withQuote(findInst(sym))) };
+  return { id: `wl-${userId}`, name: "Default", items: await Promise.all(s.watchlists[userId]!.map((sym) => withQuote(findInst(sym)))) };
 }
 
 // ---- router ---------------------------------------------------------------------------
@@ -790,19 +794,31 @@ const binaryConfig = () => ({ paper_only: true, payout_rate: BINARY_PAYOUT, expi
 const midOf = (q: { bid: string; ask: string }) => (+q.bid + +q.ask) / 2;
 const binaryRead = (b: DBinary) => { const { user_id: _u, ...rest } = b; return { ...rest, potential_return: (+b.stake * (1 + b.payout_rate)).toFixed(2) }; };
 
+/** Use a fresh public crypto quote where we have one; otherwise the clearly-labelled synthetic model. */
+function referenceQuote(i: mkt.DemoInstrument, atMs?: number) {
+  const cached = isLiveCrypto(i.symbol) ? cachedLiveQuote(i.symbol) : null;
+  const asOf = cached ? Date.parse(String(cached.as_of)) : 0;
+  const fresh = cached && (atMs === undefined
+    ? Date.now() - asOf <= 60_000
+    : asOf >= atMs - 60_000 && asOf <= atMs + 120_000);
+  if (fresh && cached) return { quote: cached as unknown as ReturnType<typeof mkt.quote>, source: "coinbase" };
+  return { quote: mkt.quote(i, atMs), source: "synthetic" };
+}
+
 function settleBinaries(s: State) {
   const nowMs = Date.now();
   for (const b of (s.binaries ?? []).filter((x) => x.status === "OPEN" && Date.parse(x.expires_at) <= nowMs)) {
     const i = instOf(b.symbol), a = s.accounts.find((x) => x.id === b.account_id)!;
     const at = Date.parse(b.expires_at);
-    const q = mkt.isOpen(i.market, at) ? mkt.quote(i, at) : null;     // synthetic prices are a function of time: use the price at expiry
+    const ref = mkt.isOpen(i.market, at) ? referenceQuote(i, at) : null;
+    const q = ref?.quote ?? null;
     const stake = toUnits(b.stake);
     let status: DBinary["status"];
     if (!q) status = nowMs - at >= BINARY_VOID_AFTER_S * 1000 ? "VOID" : "OPEN";
     else {
       const px = midOf(q), k = +b.strike;
       status = px === k ? "TIE" : (b.direction === "HIGHER" ? px > k : px < k) ? "WON" : "LOST";
-      b.settle_price = String(+px.toFixed(i.price_decimals + 2)); b.settle_price_at = q.as_of;
+      b.settle_price = String(+px.toFixed(i.price_decimals + 2)); b.settle_price_at = q.as_of; b.settle_source = ref!.source;
     }
     if (status === "OPEN") continue;
     const S = fromUnits(stake);
@@ -856,7 +872,9 @@ async function openBinary(s: State, user: DUser, a: DAccount, body: Record<strin
   const rule = (m: string) => new HttpError(422, "business_rule_violation", m);
   if (!BINARY_EXPIRIES.includes(expiry)) throw rule(`expiry_seconds must be one of [${BINARY_EXPIRIES.join(", ")}]`);
   const i = findInst(String(body.symbol ?? ""));
-  const q = mkt.quote(i);
+  if (isLiveCrypto(i.symbol)) await liveQuote(i.symbol, i.price_decimals);
+  const ref = referenceQuote(i);
+  const q = ref.quote;
   if (!q.tradable) throw rule("market is closed");
   const nowMs = Date.now(), expMs = nowMs + expiry * 1000;
   const sess = mkt.sessions(i.market as mkt.MarketKey, nowMs, expMs + 1000);
@@ -888,7 +906,8 @@ async function openBinary(s: State, user: DUser, a: DAccount, body: Record<strin
   post(s, a, "BINARY_OPEN", [["INVESTMENTS", "DEBIT", S], ["CASH", "CREDIT", S]], user.id, `Binary ${dir} ${i.symbol} ${expiry}s, stake ${S}`);
   const b: DBinary = { id: uuid(), account_id: a.id, user_id: user.id, symbol: i.symbol, direction: dir, stake: S, currency: a.base_currency, payout_rate: BINARY_PAYOUT,
     strike: String(+midOf(q).toFixed(i.price_decimals + 2)), expiry_seconds: expiry, opened_at: new Date(nowMs).toISOString(), expires_at: new Date(expMs).toISOString(),
-    status: "OPEN", settle_price: null, settle_price_at: null, settled_at: null, returned: null, pnl: null, void_reason: null, client_id: cid };
+    status: "OPEN", settle_price: null, settle_price_at: null, settled_at: null, returned: null, pnl: null, void_reason: null, client_id: cid,
+    price_source: ref.source };
   s.binaries.push(b);
   s.riskDecisions.push({ id: uuid(), account_id: a.id, order_id: null, binary_id: b.id, proposal_id: null, source: "binary", symbol: i.symbol, side, approved: true, reason: null, checks, created_at: now() });
   snapshot(s, a, "binary");
@@ -1666,46 +1685,47 @@ const routes: [string, RegExp, Handler][] = [
   }],
 
   ["GET", /^\/markets\/status$/, (c) => { authUser(c); return json(200, marketStatuses()); }],
-  ["GET", /^\/markets\/overview$/, (c) => {
+  ["GET", /^\/markets\/overview$/, async (c) => {
     authUser(c);
     const groups: Record<string, unknown[]> = { CRYPTO: [], FX: [], STOCK: [], ETF: [] };
-    for (const i of [...INSTRUMENTS].sort((a, b) => a.symbol.localeCompare(b.symbol))) groups[i.asset_class]!.push(withQuote(i));
-    return json(200, { markets: marketStatuses(), groups, data_mode: "synthetic" });
+    await Promise.all([...INSTRUMENTS].sort((a, b) => a.symbol.localeCompare(b.symbol)).map(async (i) => groups[i.asset_class]!.push(await withQuote(i))));
+    return json(200, { markets: marketStatuses(), groups, data_mode: "mixed", price_source_note: "Crypto quotes and candles use public Coinbase data when reachable; all other instruments and any fallback are simulated." });
   }],
   ["GET", /^\/markets\/instruments$/, (c) => {
     authUser(c);
     const cls = c.query.get("asset_class"); const q = c.query.get("q")?.toLowerCase();
     return json(200, INSTRUMENTS.filter((i) => (!cls || i.asset_class === cls) && (!q || `${i.symbol} ${i.display_name}`.toLowerCase().includes(q))).map(instRead));
   }],
-  ["GET", /^\/markets\/instruments\/([^/]+)$/, (c) => { authUser(c); return json(200, withQuote(findInst(c.params[0]!))); }],
-  ["GET", /^\/markets\/instruments\/([^/]+)\/quote$/, (c) => { authUser(c); return json(200, mkt.quote(findInst(c.params[0]!))); }],
-  ["GET", /^\/markets\/instruments\/([^/]+)\/candles$/, (c) => {
+  ["GET", /^\/markets\/instruments\/([^/]+)$/, async (c) => { authUser(c); return json(200, await withQuote(findInst(c.params[0]!))); }],
+  ["GET", /^\/markets\/instruments\/([^/]+)\/quote$/, async (c) => { authUser(c); const i = findInst(c.params[0]!); return json(200, await liveQuote(i.symbol, i.price_decimals) ?? mkt.quote(i)); }],
+  ["GET", /^\/markets\/instruments\/([^/]+)\/candles$/, async (c) => {
     authUser(c);
     const i = findInst(c.params[0]!);
     const tf = c.query.get("timeframe") ?? "1h";
     if (!mkt.TIMEFRAMES[tf]) throw new HttpError(422, "business_rule_violation", "Unsupported timeframe");
     const limit = Math.min(Number(c.query.get("limit") ?? 200), 1000);
-    const rows = mkt.candles(i, tf, limit);
     const names = (c.query.get("indicators") ?? "").split(",").filter(Boolean);
-    return json(200, { symbol: i.symbol, timeframe: tf, source: "synthetic", candles: rows, indicators: mkt.indicators(names, rows.map((r) => +r.close)) });
+    const real = await liveCandles(i.symbol, tf, limit);
+    const rows = real ?? mkt.candles(i, tf, limit);
+    return json(200, { symbol: i.symbol, timeframe: tf, source: real ? "coinbase" : "synthetic", candles: rows, indicators: mkt.indicators(names, rows.map((r) => +r.close)) });
   }],
-  ["GET", /^\/markets\/watchlist$/, (c) => json(200, watchlist(c.s, authUser(c).user.id))],
-  ["POST", /^\/markets\/watchlist\/items$/, (c) => {
+  ["GET", /^\/markets\/watchlist$/, async (c) => json(200, await watchlist(c.s, authUser(c).user.id))],
+  ["POST", /^\/markets\/watchlist\/items$/, async (c) => {
     const { user } = authUser(c);
     const i = findInst(String(c.body.symbol ?? ""));
-    const wl = watchlist(c.s, user.id);
+    const wl = await watchlist(c.s, user.id);
     if (wl.items.some((x) => x.instrument.symbol === i.symbol)) throw new HttpError(409, "conflict", `${i.symbol} is already on the watchlist`);
     c.s.watchlists[user.id]!.push(i.symbol);
-    return json(201, watchlist(c.s, user.id));
+    return json(201, await watchlist(c.s, user.id));
   }],
-  ["DELETE", /^\/markets\/watchlist\/items\/([^/]+)$/, (c) => {
+  ["DELETE", /^\/markets\/watchlist\/items\/([^/]+)$/, async (c) => {
     const { user } = authUser(c);
     const i = findInst(c.params[0]!);
-    watchlist(c.s, user.id);
+    await watchlist(c.s, user.id);
     const list = c.s.watchlists[user.id]!;
     if (!list.includes(i.symbol)) throw new HttpError(404, "not_found", `${i.symbol} is not on the watchlist`);
     c.s.watchlists[user.id] = list.filter((x) => x !== i.symbol);
-    return json(200, watchlist(c.s, user.id));
+    return json(200, await watchlist(c.s, user.id));
   }],
 
   ["GET", /^\/research\/status$/, (c) => { authUser(c); return json(200, { engine: "extractive", model: null, embedding_model: "hashing-v1-384 (browser)", documents: c.s.docs.length, chunks: c.s.chunks.length, url_ingestion_enabled: false }); }],

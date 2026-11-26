@@ -9,19 +9,21 @@ import { Field, Input, Select } from "@/components/ui/form";
 import { Stat } from "@/components/ui/stat";
 import { Table, Td, Th, Tr } from "@/components/ui/table";
 import { useBinaryConfig, useBinaryContracts, useBinaryStats, useOpenBinary } from "@/features/binary/hooks";
-import { LiveTickChart } from "@/charts/LiveTickChart";
+import { PriceChart, type ChartPriceLine } from "@/charts/PriceChart";
 import { useCandles, useMarketOverview } from "@/features/markets/hooks";
 import { usePortfolio } from "@/features/trading/hooks";
 import { useAccountParam } from "@/features/trading/useAccountParam";
 import { cn, formatDateTime, formatMoney, formatPrice } from "@/lib/utils";
 import { ChecksList } from "@/pages/RiskPage";
 import { api, ApiError, type BinaryContract, type BinaryDirection, type InstrumentWithQuote, type RiskCheck } from "@/services/api";
+import { SourceBadge } from "@/pages/MarketsPage";
 
 const EXPIRY_LABEL: Record<number, string> = { 60: "1 minute", 300: "5 minutes", 900: "15 minutes", 3600: "1 hour", 86400: "1 day" };
 const label = (s: number) => EXPIRY_LABEL[s] ?? `${s}s`;
 const pct = (v: number | null | undefined, dp = 1) => (v == null ? "—" : `${(v * 100).toFixed(dp)}%`);
 const slug = (s: string) => s.replace("/", "");
 const STATUS_TONE = { OPEN: "info", WON: "positive", LOST: "negative", TIE: "neutral", VOID: "neutral" } as const;
+const token = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim() || "#888";
 
 function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
@@ -77,9 +79,14 @@ export function BinaryPage() {
   const prices = useMemo(() => Object.fromEntries(symbols.map((s) => [s.instrument.symbol, s.quote])), [symbols]);
   const q = quote.data?.quote, inst = quote.data?.instrument;
   const mid = q ? (Number(q.bid) + Number(q.ask)) / 2 : null;
-  const minute = useCandles(slug(symbol), "1m", []);
-  const seed = useMemo(() => (minute.data?.candles ?? []).slice(-90).map((c) => ({ t: Math.floor(Date.parse(c.open_time) / 1000) + 59, v: Number(c.close) })), [minute.data]);
+  const [chartTf, setChartTf] = useState("1m");
+  const minute = useCandles(slug(symbol), chartTf, []);
+  const strikes = useMemo<ChartPriceLine[]>(() => openItems.filter((c) => c.symbol === symbol).map((c) => ({
+    id: c.id, price: Number(c.strike), title: c.direction === "HIGHER" ? "▲ strike" : "▼ strike",
+    color: token(c.direction === "HIGHER" ? "--color-positive" : "--color-negative"),
+  })), [openItems, symbol]);
   const tick = useMemo(() => (q && mid != null ? { t: Math.floor(Date.parse(q.as_of) / 1000), v: mid } : null), [q?.as_of, mid]); // eslint-disable-line react-hooks/exhaustive-deps
+  const liveTick = useMemo(() => (tick ? { price: tick.v, at: new Date(tick.t * 1000).toISOString() } : null), [tick]);
   const ccy = account?.base_currency ?? "GBP";
   const payout = cfg.data?.payout_rate ?? 0.8;
   const breakEven = cfg.data?.break_even_win_rate ?? 1 / (1 + payout);
@@ -159,12 +166,18 @@ export function BinaryPage() {
 
         <div className="space-y-6">
           <Card>
-            <CardHeader title={`${symbol} · live`} description="Mid price, one point per streamed quote. Dashed lines are your open strikes." />
+            <CardHeader title={`${symbol} · OHLC candles`} description={`${chartTf} candlesticks with live price ticks. Dashed lines are your open strikes.`}
+              action={<div className="flex items-center gap-1"><SourceBadge source={minute.data?.source} />{[ "1m", "5m", "15m" ].map((tf) => (
+                <button key={tf} onClick={() => setChartTf(tf)} aria-pressed={chartTf === tf}
+                  className={cn("rounded border px-1.5 py-0.5 text-[11px]", chartTf === tf ? "border-accent/60 bg-accent/10 text-accent" : "border-border text-muted hover:text-fg")}>{tf}</button>
+              ))}</div>} />
             <div className="px-2 pb-3">
-              {seed.length > 0
-                ? <LiveTickChart symbol={symbol} seed={seed} tick={tick} decimals={(inst?.price_decimals ?? 2) + 1}
-                    strikes={openItems.filter((c) => c.symbol === symbol).map((c) => ({ id: c.id, price: Number(c.strike), direction: c.direction }))} />
-                : <div className="flex h-[220px] items-center justify-center"><Spinner /></div>}
+              {minute.data && minute.data.candles.length > 0
+                ? <PriceChart data={minute.data} decimals={(inst?.price_decimals ?? 2) + 1} height={260} live={liveTick} priceLines={strikes} testId="live-tick-chart" />
+                : <div className="flex h-[260px] items-center justify-center"><Spinner /></div>}
+              <p className="px-1 pt-2 text-[10px] text-subtle">
+                {minute.data?.source === "coinbase" ? "Real public Coinbase OHLC candles" : "Simulated OHLC candles — not real market data"}. Paper contracts use {minute.data?.source === "coinbase" ? "public reference prices" : "simulated prices"}; no real money is traded.
+              </p>
             </div>
           </Card>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="binary-stats">

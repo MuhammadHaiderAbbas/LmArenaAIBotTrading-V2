@@ -39,8 +39,9 @@ function AuthLayout({ title, subtitle, children }: { title: string; subtitle: st
           <p className="mt-1 text-sm text-muted">{subtitle}</p>
           {isDemo && (
             <div className="mt-5 rounded-md border border-info/40 bg-info/10 px-3 py-2.5 text-xs leading-relaxed text-info">
-              <strong>Public demo.</strong> SIMULATED DATA: accounts, balances and prices are generated in this
-              browser and stored only on this device. No real market data or money is used. The
+              <strong>Public demo.</strong> SIMULATED DATA: accounts, balances and ledger are generated
+              in this browser and stored only on this device. Crypto charts use public Coinbase data when
+              reachable; everything else is simulated. Paper money only. The
               <a className="underline" href={`${import.meta.env.BASE_URL}live/`}> live API build</a> connects to Supabase.
             </div>
           )}

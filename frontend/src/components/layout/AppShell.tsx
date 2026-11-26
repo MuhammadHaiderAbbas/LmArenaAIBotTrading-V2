@@ -1,8 +1,11 @@
 import { LogOut, Menu, X } from "lucide-react";
 import { useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useSearchParams } from "react-router-dom";
 import { Badge, StatusDot } from "@/components/ui/badge";
-import { useSystemInfo } from "@/features/accounts/hooks";
+import { useAccounts, useSystemInfo } from "@/features/accounts/hooks";
+import { useActiveAccountId } from "@/features/accounts/activeAccount";
+import { setActiveAccountId } from "@/features/accounts/activeAccount";
+import { useAccountParam } from "@/features/trading/useAccountParam";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { useAccountStream, useLiveMode } from "@/features/live/stream";
 import { useSystemHalt } from "@/features/risk/hooks";
@@ -53,6 +56,35 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+function AccountPicker() {
+  const accounts = useAccounts();
+  const active = useActiveAccountId();
+  const [params, setParams] = useSearchParams();
+  const list = accounts.data ?? [];
+  const id = list.find((a) => a.id === active)?.id ?? list[0]?.id ?? "";
+  return (
+    <select
+      aria-label="Active paper account"
+      title="The account used by trading, portfolio and risk pages"
+      className="hidden max-w-44 rounded-md border border-border bg-surface-2 px-2 py-1 text-xs text-fg md:block"
+      value={id}
+      onChange={(e) => {
+        setActiveAccountId(e.target.value);
+        const next = new URLSearchParams(params);
+        if (e.target.value) next.set("account", e.target.value); else next.delete("account");
+        setParams(next);
+      }}
+    >
+      {list.length === 0 && <option value="">No paper account</option>}
+      {list.map((a) => <option key={a.id} value={a.id}>{a.name} · {a.base_currency}</option>)}
+    </select>
+  );
+}
+
+function useAccountParamSync() {
+  useAccountParam();
+}
+
 function LiveBadge() {
   const { mode } = useLiveMode();
   const label = mode === "live" ? "Live" : mode === "polling" ? "Live · polling" : mode === "connecting" ? "Connecting" : "Offline";
@@ -73,6 +105,8 @@ export function AppShell() {
   const info = useSystemInfo();
   const [open, setOpen] = useState(false);
   const location = useLocation();
+  // Keep a single validated account selection for every route (including deep links).
+  useAccountParamSync();
   const current = NAV.find((n) => (n.to === "/" ? location.pathname === "/" : location.pathname.startsWith(n.to)));
 
   return (
@@ -105,7 +139,7 @@ export function AppShell() {
         <PaperTradingBanner />
         {isDemo && (
           <div data-testid="demo-banner" className="print:hidden border-b border-info/40 bg-info/10 px-4 py-2 text-center text-xs font-medium text-info">
-            SIMULATED DATA — prices, accounts and ledger are generated in this browser. No real market data or money is used.
+            SIMULATED DATA — accounts, ledger and non-crypto prices are generated in this browser. Crypto candles use public Coinbase data when reachable. Virtual money only.
           </div>
         )}
         <header className="flex h-14 print:hidden shrink-0 items-center gap-3 border-b border-border bg-surface/80 px-4 backdrop-blur lg:px-6">
@@ -114,6 +148,7 @@ export function AppShell() {
             <h1 className="truncate text-sm font-semibold">{current?.label ?? "AUREX AI"}</h1>
             <p className="hidden truncate text-xs text-muted sm:block">{current?.description}</p>
           </div>
+          <AccountPicker />
           <LiveBadge />
           {isDemo && <Badge tone="info" title="Static demo: runs entirely in your browser with simulated data">Demo</Badge>}
           <Badge tone="accent" title="Virtual capital only. No real money is traded.">
